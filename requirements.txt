@@ -1,0 +1,10 @@
+pandas>=2.0.0
+numpy>=1.24.0
+yahoo_fin>=0.8.9
+python-dotenv>=1.0.0
+SQLAlchemy>=2.0.0
+pytest>=7.4.0
+requests>=2.31.0
+tenacity>=8.2.0
+loguru>=0.7.0
+pydantic>=2.0.0 
