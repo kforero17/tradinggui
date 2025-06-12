@@ -107,17 +107,6 @@ def process_tickers_individual(tickers: List[str]) -> None:
     logger.info(f"  Successful: {successful}, Failed: {failed}, Total: {total}")
     logger.info(f"  Success rate: {success_rate:.1f}%")
 
-def process_subset_for_testing(tickers: List[str], max_tickers: int = 50) -> None:
-    """Process a subset of tickers for testing purposes."""
-    if len(tickers) > max_tickers:
-        test_tickers = tickers[:max_tickers]
-        logger.info(f"Testing mode: Processing first {max_tickers} tickers out of {len(tickers)}")
-    else:
-        test_tickers = tickers
-        logger.info(f"Testing mode: Processing all {len(test_tickers)} tickers")
-    
-    process_tickers_batch(test_tickers, batch_size=10)
-
 def display_database_summary():
     """Display a summary of the data in the database."""
     try:
@@ -171,14 +160,9 @@ def main():
         
         logger.info(f"📈 Found {len(tickers)} unique tickers to process")
         
-        # For demonstration, let's process a subset first
-        # Remove this in production or make it configurable
-        if len(tickers) > 100:
-            logger.info("🧪 Large dataset detected - running in test mode with subset")
-            process_subset_for_testing(tickers, max_tickers=50)
-        else:
-            logger.info("⚡ Processing all tickers using batch method")
-            process_tickers_batch(tickers, batch_size=20)
+        # Process all tickers using batch method for optimal performance
+        logger.info("⚡ Processing all tickers using batch method")
+        process_tickers_batch(tickers, batch_size=20)
         
         # Display final summary
         logger.info("📊 Displaying database summary:")

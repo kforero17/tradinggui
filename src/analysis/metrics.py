@@ -503,4 +503,4 @@ class StockMetricsCalculator:
         return df
 
 # Create global metrics calculator instance
-metrics_calculator = StockMetricsCalculator(use_mock_data=True)  # Use mock data by default due to network issues 
+metrics_calculator = StockMetricsCalculator(use_mock_data=False)  # Use mock data by default due to network issues 
