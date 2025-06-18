@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     
     # API Settings
     HISTORICAL_LOOKBACK_DAYS: int = 150
-    YAHOO_FIN_RATE_LIMIT: float = 1.0  # seconds between API calls
+    YAHOO_FIN_RATE_LIMIT: float = 3.0  # Increased from 1.0 to 3.0 seconds between API calls
     
     # Data Sources
     SP500_CSV_PATH: Path = RAW_DATA_DIR / "sp500.csv"

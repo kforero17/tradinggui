@@ -8,6 +8,7 @@ from .config.settings import settings
 from .data.ticker_loader import ticker_loader
 from .data.database import db
 from .analysis.metrics import metrics_calculator
+from .gui import db_browser as gui_browser
 
 def setup_logging():
     """Configure logging."""
@@ -22,7 +23,7 @@ def setup_logging():
     logger.add(
         sys.stderr,
         format=log_format,
-        level=settings.LOG_LEVEL,
+        level="DEBUG",  # Temporarily set to DEBUG for troubleshooting
         colorize=True
     )
     
@@ -35,14 +36,14 @@ def setup_logging():
             retention="7 days"
         )
 
-def process_tickers_batch(tickers: List[str], batch_size: int = 20) -> None:
+def process_tickers_batch(tickers: List[str]) -> None:
     """Process tickers using batch processing for better efficiency and rate limiting."""
     total = len(tickers)
-    logger.info(f"Starting batch processing of {total} tickers with batch size {batch_size}")
+    logger.info(f"Starting batch processing of {total} tickers")
     
     try:
         # Use the new batch processing method
-        all_metrics = metrics_calculator.get_metrics_batch(tickers, batch_size=batch_size)
+        all_metrics = metrics_calculator.get_metrics_batch(tickers)
         
         # Store all successful metrics in the database
         if all_metrics:
@@ -160,15 +161,23 @@ def main():
         
         logger.info(f"📈 Found {len(tickers)} unique tickers to process")
         
-        # Process all tickers using batch method for optimal performance
-        logger.info("⚡ Processing all tickers using batch method")
-        process_tickers_batch(tickers, batch_size=20)
+        # Process all tickers in batches of 50
+        batch_size = 50
+        total_batches = (len(tickers) + batch_size - 1) // batch_size
+        for batch_num, i in enumerate(range(0, len(tickers), batch_size), 1):
+            batch = tickers[i:i+batch_size]
+            logger.info(f"⚡ Processing batch {batch_num}/{total_batches} ({len(batch)} tickers)")
+            process_tickers_batch(batch)
         
         # Display final summary
         logger.info("📊 Displaying database summary:")
         display_database_summary()
         
         logger.success("✅ Stock metrics collection completed successfully!")
+
+        # Launch the GUI
+        logger.info("🚀 Launching the Database Browser GUI...")
+        gui_browser.main()
         
     except KeyboardInterrupt:
         logger.warning("⚠️  Process interrupted by user")

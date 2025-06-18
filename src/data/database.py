@@ -1,6 +1,6 @@
 from typing import List, Optional
 import pandas as pd
-from sqlalchemy import create_engine, Column, Float, String, DateTime
+from sqlalchemy import create_engine, Column, Float, String, DateTime, func
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime
@@ -21,8 +21,6 @@ class StockMetrics(Base):
     pe_ratio = Column(Float)
     pb_ratio = Column(Float)
     ps_ratio = Column(Float)
-    peg_ratio = Column(Float)
-    forward_pe = Column(Float)
     market_cap = Column(Float)
     enterprise_value = Column(Float)
     ebitda = Column(Float)
@@ -59,10 +57,22 @@ class Database:
             session.close()
 
     def get_latest_metrics(self, ticker: Optional[str] = None) -> pd.DataFrame:
-        """Retrieve latest metrics from database."""
+        """Retrieve latest metrics from database for each ticker."""
         session = self.Session()
         try:
-            query = session.query(StockMetrics)
+            # Subquery to find the latest update time for each ticker
+            latest_updates = session.query(
+                StockMetrics.ticker, 
+                func.max(StockMetrics.updated_at).label('latest_update')
+            ).group_by(StockMetrics.ticker).subquery()
+
+            # Main query to get the full record for the latest update
+            query = session.query(StockMetrics).join(
+                latest_updates,
+                (StockMetrics.ticker == latest_updates.c.ticker) &
+                (StockMetrics.updated_at == latest_updates.c.latest_update)
+            )
+
             if ticker:
                 query = query.filter(StockMetrics.ticker == ticker)
             

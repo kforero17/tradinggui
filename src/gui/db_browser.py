@@ -19,7 +19,7 @@ class StockMetricsModel(QStandardItemModel):
         super().__init__()
         self.setHorizontalHeaderLabels([
             "Ticker", "Last Price", "MA100", "EMA100", "% Above MA100",
-            "P/E Ratio", "P/B Ratio", "P/S Ratio", "PEG Ratio", "Forward P/E",
+            "P/E Ratio", "P/B Ratio", "P/S Ratio", 
             "Market Cap", "Enterprise Value", "EBITDA", "EBITDA/EV",
             "Updated At"
         ])
@@ -32,6 +32,19 @@ class StockMetricsModel(QStandardItemModel):
             if df.empty:
                 logger.warning("No data found in database")
                 return
+            
+            # Explicitly select and order columns to match GUI headers
+            # GUI headers: "Ticker", "Last Price", "MA100", "EMA100", "% Above MA100",
+            #              "P/E Ratio", "P/B Ratio", "P/S Ratio", 
+            #              "Market Cap", "Enterprise Value", "EBITDA", "EBITDA/EV", "Updated At"
+            expected_columns = [
+                'ticker', 'last_price', 'ma_100', 'ema_100', 'pct_above_ma_100',
+                'pe_ratio', 'pb_ratio', 'ps_ratio', 
+                'market_cap', 'enterprise_value', 'ebitda', 'ebitda_ev', 'updated_at'
+            ]
+            
+            # Select only the columns we need in the correct order
+            df = df[expected_columns]
             
             # Format numeric columns
             numeric_cols = ['last_price', 'ma_100', 'ema_100', 'pct_above_ma_100',
@@ -53,7 +66,7 @@ class StockMetricsModel(QStandardItemModel):
             # Populate model
             for _, row in df.iterrows():
                 items = []
-                for col in df.columns:
+                for col in expected_columns:  # Use expected_columns instead of df.columns
                     item = QStandardItem(str(row[col]))
                     item.setEditable(False)
                     items.append(item)
@@ -148,7 +161,7 @@ class DatabaseBrowser(QMainWindow):
             self.model.clear()
             self.model.setHorizontalHeaderLabels([
                 "Ticker", "Last Price", "MA100", "EMA100", "% Above MA100",
-                "P/E Ratio", "P/B Ratio", "P/S Ratio", "PEG Ratio", "Forward P/E",
+                "P/E Ratio", "P/B Ratio", "P/S Ratio",
                 "Market Cap", "Enterprise Value", "EBITDA", "EBITDA/EV",
                 "Updated At"
             ])
