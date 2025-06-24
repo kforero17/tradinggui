@@ -3,7 +3,7 @@ import pandas as pd
 from sqlalchemy import create_engine, Column, Float, String, DateTime, func
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
-from datetime import datetime
+from datetime import datetime, timedelta
 from ..config.settings import settings
 from loguru import logger
 
@@ -26,6 +26,10 @@ class StockMetrics(Base):
     ebitda = Column(Float)
     ebitda_ev = Column(Float)
     updated_at = Column(DateTime, default=datetime.utcnow)
+
+class Portfolio(Base):
+    __tablename__ = 'portfolio'
+    ticker = Column(String, primary_key=True)
 
 class Database:
     def __init__(self):
@@ -53,6 +57,19 @@ class Database:
             session.rollback()
             logger.error(f"Error storing metrics: {e}")
             raise
+        finally:
+            session.close()
+
+    def has_recent_metrics(self, ticker: str, age_limit_days: int) -> bool:
+        """Check if a ticker has recent metrics."""
+        session = self.Session()
+        try:
+            latest_update = session.query(func.max(StockMetrics.updated_at)).filter_by(ticker=ticker).scalar()
+            if latest_update:
+                if datetime.utcnow() - latest_update < timedelta(days=age_limit_days):
+                    logger.debug(f"Ticker {ticker} has recent data. Last updated: {latest_update}. Skipping.")
+                    return True
+            return False
         finally:
             session.close()
 
@@ -86,6 +103,50 @@ class Database:
         session = self.Session()
         try:
             return [ticker[0] for ticker in session.query(StockMetrics.ticker).all()]
+        finally:
+            session.close()
+
+    def get_portfolio_tickers(self) -> List[str]:
+        """Get all tickers from the portfolio."""
+        session = self.Session()
+        try:
+            return [p.ticker for p in session.query(Portfolio.ticker).all()]
+        finally:
+            session.close()
+
+    def add_portfolio_ticker(self, ticker: str) -> None:
+        """Add a ticker to the portfolio."""
+        session = self.Session()
+        try:
+            existing = session.query(Portfolio).filter_by(ticker=ticker).first()
+            if not existing:
+                session.add(Portfolio(ticker=ticker))
+                session.commit()
+                logger.info(f"Added {ticker} to portfolio.")
+            else:
+                logger.warning(f"Ticker {ticker} already in portfolio.")
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Error adding {ticker} to portfolio: {e}")
+            raise
+        finally:
+            session.close()
+
+    def delete_portfolio_ticker(self, ticker: str) -> None:
+        """Delete a ticker from the portfolio."""
+        session = self.Session()
+        try:
+            record = session.query(Portfolio).filter_by(ticker=ticker).first()
+            if record:
+                session.delete(record)
+                session.commit()
+                logger.info(f"Deleted {ticker} from portfolio.")
+            else:
+                logger.warning(f"Ticker {ticker} not found in portfolio for deletion.")
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Error deleting {ticker} from portfolio: {e}")
+            raise
         finally:
             session.close()
 

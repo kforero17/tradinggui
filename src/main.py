@@ -8,7 +8,6 @@ from .config.settings import settings
 from .data.ticker_loader import ticker_loader
 from .data.database import db
 from .analysis.metrics import metrics_calculator
-from .gui import db_browser as gui_browser
 
 def setup_logging():
     """Configure logging."""
@@ -39,74 +38,20 @@ def setup_logging():
 def process_tickers_batch(tickers: List[str]) -> None:
     """Process tickers using batch processing for better efficiency and rate limiting."""
     total = len(tickers)
-    logger.info(f"Starting batch processing of {total} tickers")
+    logger.info(f"Starting to process a batch of {total} tickers.")
     
     try:
-        # Use the new batch processing method
         all_metrics = metrics_calculator.get_metrics_batch(tickers)
         
-        # Store all successful metrics in the database
         if all_metrics:
-            logger.info(f"Storing {len(all_metrics)} successful metrics in database")
+            logger.info(f"Storing {len(all_metrics)} new metrics in database.")
             db.store_metrics(all_metrics)
+        else:
+            logger.info("No new metrics were generated in this batch.")
             
-        # Calculate and log final statistics
-        successful = len(all_metrics)
-        failed = total - successful
-        success_rate = (successful / total) * 100 if total > 0 else 0
-        
-        logger.info(f"Batch processing complete:")
-        logger.info(f"  Total tickers: {total}")
-        logger.info(f"  Successful: {successful}")
-        logger.info(f"  Failed: {failed}")
-        logger.info(f"  Success rate: {success_rate:.1f}%")
-        
-        # Log some sample results
-        if all_metrics:
-            logger.info("Sample processed tickers:")
-            for i, metrics in enumerate(all_metrics[:5]):  # Show first 5
-                ticker = metrics['ticker']
-                pe_ratio = metrics.get('pe_ratio', 'N/A')
-                last_price = metrics.get('last_price', 'N/A')
-                logger.info(f"  {ticker}: Price=${last_price:.2f}, P/E={pe_ratio}")
-                
     except Exception as e:
         logger.error(f"Error during batch processing: {e}")
         raise
-
-def process_tickers_individual(tickers: List[str]) -> None:
-    """Fallback method: Process tickers individually with rate limiting."""
-    total = len(tickers)
-    successful = 0
-    failed = 0
-    
-    logger.info(f"Processing {total} tickers individually")
-    
-    for i, ticker in enumerate(tickers, 1):
-        logger.info(f"[{i}/{total}] Processing {ticker}")
-        
-        try:
-            metrics = metrics_calculator.get_metrics(ticker)
-            if metrics:
-                db.store_metrics([metrics])
-                successful += 1
-                logger.success(f"✓ {ticker} processed successfully")
-            else:
-                failed += 1
-                logger.warning(f"✗ {ticker} failed - no metrics available")
-                
-        except Exception as e:
-            logger.error(f"✗ {ticker} failed - error: {e}")
-            failed += 1
-            
-        # Rate limiting between individual requests
-        if i < total:
-            time.sleep(settings.YAHOO_FIN_RATE_LIMIT)
-    
-    success_rate = (successful / total) * 100 if total > 0 else 0
-    logger.info(f"Individual processing complete:")
-    logger.info(f"  Successful: {successful}, Failed: {failed}, Total: {total}")
-    logger.info(f"  Success rate: {success_rate:.1f}%")
 
 def display_database_summary():
     """Display a summary of the data in the database."""
@@ -174,10 +119,6 @@ def main():
         display_database_summary()
         
         logger.success("✅ Stock metrics collection completed successfully!")
-
-        # Launch the GUI
-        logger.info("🚀 Launching the Database Browser GUI...")
-        gui_browser.main()
         
     except KeyboardInterrupt:
         logger.warning("⚠️  Process interrupted by user")

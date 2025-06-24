@@ -8,8 +8,10 @@ import time
 import random
 import requests
 from stockdex import Ticker
+from concurrent.futures import ThreadPoolExecutor
 
 from ..config.settings import settings
+from ..data.database import db
 
 class StockdexAPIError(Exception):
     """Custom exception for Stockdex API errors."""
@@ -19,7 +21,13 @@ class StockMetricsCalculator:
     def __init__(self, use_mock_data: bool = False):
         self.lookback_days = settings.HISTORICAL_LOOKBACK_DAYS
         self.use_mock_data = use_mock_data
+        self.recent_data_age_limit_days = settings.RECENT_DATA_AGE_LIMIT_DAYS
         
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type(StockdexAPIError)
+    )
     def _get_historical_data_from_stockdex(self, ticker: str, start_date: datetime, end_date: datetime) -> Optional[pd.DataFrame]:
         """Fetch historical data from Stockdex (via Yahoo Finance)."""
         try:
@@ -73,6 +81,11 @@ class StockMetricsCalculator:
         logger.info(f"Fetching historical data for {ticker} from {start_date.date()} to {today.date()}")
         return self._get_historical_data_from_stockdex(ticker, start_date, today)
 
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type(StockdexAPIError)
+    )
     def _get_valuation_metrics(self, ticker: str, last_price: Optional[float] = None) -> Dict[str, Any]:
         """Fetch and compute valuation metrics from Stockdex (via Yahoo Finance)."""
         if self.use_mock_data:
@@ -150,7 +163,7 @@ class StockMetricsCalculator:
             }
         except Exception as e:
             logger.error(f"Error calculating valuation metrics for {ticker}: {e}", exc_info=True)
-            return {}
+            raise StockdexAPIError(f"Could not fetch valuation metrics for {ticker}") from e
 
     def _parse_financial_number(self, value: Any) -> Optional[float]:
         """Convert string like '8.71B' or '439.26M' to float."""
@@ -217,6 +230,7 @@ class StockMetricsCalculator:
                 logger.warning(f"Invalid momentum metrics for {ticker}")
                 return None
 
+            logger.success(f"Successfully generated metrics for {ticker}")
             return metrics
         except ValueError as e:
             logger.warning(f"Could not get metrics for {ticker}: {e}")
@@ -228,26 +242,38 @@ class StockMetricsCalculator:
             logger.error(f"Unexpected error processing {ticker}: {e}")
             return None
 
-    def get_metrics_batch(self, tickers: List[str]) -> List[Dict[str, Any]]:
-        """Get metrics for multiple tickers."""
+    def get_metrics_batch(self, tickers: List[str], max_workers: int = 10) -> List[Dict[str, Any]]:
+        """Get metrics for multiple tickers in parallel."""
         all_metrics = []
         total_tickers = len(tickers)
         
-        logger.info(f"Processing {total_tickers} tickers.")
+        logger.info(f"Processing {total_tickers} tickers in batch.")
 
-        for i, ticker in enumerate(tickers):
-            logger.info(f"[{i+1}/{total_tickers}] Processing {ticker}")
-            try:
-                metrics = self.get_metrics(ticker)
+        # 1. Filter out tickers that have been updated recently
+        tickers_to_process = [
+            t for t in tickers 
+            if not db.has_recent_metrics(t, self.recent_data_age_limit_days)
+        ]
+        
+        skipped_count = total_tickers - len(tickers_to_process)
+        if skipped_count > 0:
+            logger.info(f"Skipped {skipped_count} tickers with recent data.")
+
+        if not tickers_to_process:
+            logger.info("No tickers to process after filtering.")
+            return []
+
+        # 2. Process remaining tickers in parallel
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            results = executor.map(self.get_metrics, tickers_to_process)
+            
+            successful_count = 0
+            for metrics in results:
                 if metrics:
                     all_metrics.append(metrics)
-                    logger.success(f"Successfully processed {ticker}")
-                else:
-                    logger.warning(f"Failed to get metrics for {ticker}")
-            except Exception as e:
-                logger.error(f"Error processing {ticker} in batch: {e}")
-        
-        logger.info(f"Batch processing complete. Successfully processed {len(all_metrics)}/{total_tickers} tickers")
+                    successful_count += 1
+
+        logger.info(f"Batch processing complete. Successfully fetched metrics for {successful_count}/{len(tickers_to_process)} tickers.")
         return all_metrics
 
     def _validate_momentum_metrics(self, metrics: Dict[str, Any]) -> bool:

@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stock Portfolio</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: #121212;
+            color: #e0e0e0;
+            margin: 0;
+            padding: 2rem;
+        }
+        .container {
+            max-width: 1200px;
+            margin: auto;
+        }
+        h1 {
+            color: #ffffff;
+            text-align: center;
+        }
+        .flashes {
+            list-style: none;
+            padding: 0;
+            margin-bottom: 1rem;
+        }
+        .flashes li {
+            padding: 1rem;
+            margin-bottom: 0.5rem;
+            border-radius: 4px;
+        }
+        .flashes .success { background-color: #28a745; color: white; }
+        .flashes .error { background-color: #dc3545; color: white; }
+        .flashes .warning { background-color: #ffc107; color: black; }
+
+        form {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+        input[type="text"] {
+            flex-grow: 1;
+            padding: 0.75rem;
+            border: 1px solid #333;
+            background-color: #222;
+            color: #e0e0e0;
+            border-radius: 4px;
+        }
+        button {
+            padding: 0.75rem 1.5rem;
+            border: none;
+            background-color: #007bff;
+            color: white;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+
+        .portfolio-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(500px, 1fr));
+            gap: 2rem;
+        }
+        .stock-card {
+            background-color: #1e1e1e;
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 1.5rem;
+            display: flex;
+            flex-direction: column;
+        }
+        .stock-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+        .stock-header h2 {
+            margin: 0;
+            font-size: 1.5rem;
+        }
+        .delete-btn {
+            color: #dc3545;
+            text-decoration: none;
+            font-size: 0.9rem;
+        }
+        .metrics-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 1.5rem;
+        }
+        .metrics-table th, .metrics-table td {
+            text-align: left;
+            padding: 0.5rem;
+            border-bottom: 1px solid #333;
+        }
+        .metrics-table th {
+            color: #aaa;
+            font-weight: normal;
+        }
+        .plot-container {
+            flex-grow: 1;
+            min-height: 300px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>My Stock Portfolio</h1>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                <ul class="flashes">
+                {% for category, message in messages %}
+                    <li class="{{ category }}">{{ message }}</li>
+                {% endfor %}
+                </ul>
+            {% endif %}
+        {% endwith %}
+
+        <form action="{{ url_for('add_stock') }}" method="post">
+            <input type="text" name="ticker" placeholder="Enter Ticker Symbol (e.g., AAPL)">
+            <button type="submit">Add Stock</button>
+        </form>
+        
+        <div class="portfolio-grid">
+            {% for stock in portfolio %}
+                <div class="stock-card">
+                    <div class="stock-header">
+                        <h2>{{ stock.ticker }}</h2>
+                        <a href="{{ url_for('delete_stock', ticker=stock.ticker) }}" class="delete-btn">Remove</a>
+                    </div>
+                    
+                    <table class="metrics-table">
+                        <tr>
+                            <th>Last Price</th>
+                            <td>${{ "%.2f"|format(stock.last_price) if stock.last_price is not none else 'N/A' }}</td>
+                            <th>P/E Ratio</th>
+                            <td>{{ "%.2f"|format(stock.pe_ratio) if stock.pe_ratio is not none else 'N/A' }}</td>
+                        </tr>
+                        <tr>
+                            <th>Market Cap</th>
+                            <td>${{ "{:,.0f}".format(stock.market_cap) if stock.market_cap is not none else 'N/A' }}</td>
+                            <th>P/B Ratio</th>
+                            <td>{{ "%.2f"|format(stock.pb_ratio) if stock.pb_ratio is not none else 'N/A' }}</td>
+                        </tr>
+                    </table>
+
+                    <div class="plot-container">
+                        {{ stock.plot|safe if stock.plot else '<p>No plot data available.</p>' }}
+                    </div>
+                </div>
+            {% else %}
+                <p>Your portfolio is empty. Add a stock to get started.</p>
+            {% endfor %}
+        </div>
+    </div>
+</body>
+</html> 
