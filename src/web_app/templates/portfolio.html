@@ -105,11 +105,28 @@
             flex-grow: 1;
             min-height: 300px;
         }
+        .nav-links {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+        .nav-links a {
+            color: #007bff;
+            text-decoration: none;
+            margin: 0 1rem;
+        }
+        .nav-links a:hover {
+            text-decoration: underline;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>My Stock Portfolio</h1>
+
+        <div class="nav-links">
+            <a href="{{ url_for('portfolio') }}">My Portfolio</a>
+            <a href="{{ url_for('research') }}">Research</a>
+        </div>
 
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}

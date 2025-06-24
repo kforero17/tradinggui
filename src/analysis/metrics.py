@@ -88,20 +88,28 @@ class StockMetricsCalculator:
     )
     def _get_valuation_metrics(self, ticker: str, last_price: Optional[float] = None) -> Dict[str, Any]:
         """Fetch and compute valuation metrics from Stockdex (via Yahoo Finance)."""
+        # Define a default metrics dictionary to ensure all keys are always present.
+        metrics = {
+            "market_cap": None, "pe_ratio": None, "pb_ratio": None,
+            "enterprise_value": None, "ebitda": None, "ebitda_ev": None,
+            "ps_ratio": None,
+        }
+
         if self.use_mock_data:
-            return self._generate_mock_valuation_data(ticker)
+            mock_data = self._generate_mock_valuation_data(ticker)
+            metrics.update(mock_data)
+            return metrics
         
         if last_price is None:
             logger.warning(f"Cannot calculate valuation metrics for {ticker} without a share price.")
-            return {}
+            return metrics
 
         try:
             stock = Ticker(ticker)
             
-            # --- 1. Get Market Cap and P/E from Summary ---
+            # --- 1. Get Summary Data (Market Cap, Quote Type) ---
             raw_summary = stock.yahoo_web_summary
             summary = {}
-            market_cap, pe_ratio = None, None
 
             if isinstance(raw_summary, dict):
                 summary = raw_summary
@@ -109,11 +117,18 @@ class StockMetricsCalculator:
                 summary = raw_summary.iloc[:, 0].to_dict()
 
             if summary:
+                quote_type_data = summary.get('quoteType')
+                quote_type = quote_type_data.get('raw') if isinstance(quote_type_data, dict) else quote_type_data
+                
                 market_cap_data = summary.get('marketCap')
-                if isinstance(market_cap_data, dict):
-                    market_cap = self._parse_financial_number(market_cap_data.get('raw'))
-                else:
-                    market_cap = self._parse_financial_number(market_cap_data)
+                market_cap = self._parse_financial_number(
+                    market_cap_data.get('raw') if isinstance(market_cap_data, dict) else market_cap_data
+                )
+                metrics["market_cap"] = market_cap
+
+                if quote_type == 'ETF':
+                    logger.info(f"{ticker} is an ETF. Standard valuation metrics are not applicable.")
+                    return metrics  # Return with just market_cap and Nones for the rest
             else:
                 logger.warning(f"Could not parse summary data for {ticker}.")
 
@@ -123,12 +138,7 @@ class StockMetricsCalculator:
 
             if financials_df.empty or balance_sheet_df.empty:
                 logger.warning(f"Could not retrieve full financial or balance sheet data for {ticker}. Metrics will be incomplete.")
-                return {
-                    "market_cap": market_cap,
-                    "pe_ratio": pe_ratio,
-                    "pb_ratio": None, "enterprise_value": None, "ebitda": None,
-                    "ebitda_ev": None, "ps_ratio": None, "peg_ratio": None, "forward_pe": None
-                }
+                return metrics
             
             financials = financials_df.iloc[0].to_dict()
             balance_sheet = balance_sheet_df.iloc[0].to_dict()
@@ -146,24 +156,25 @@ class StockMetricsCalculator:
             # --- 3. Calculate Derived Metrics ---
             pe_ratio = last_price / annual_diluted_eps if all(v is not None for v in [last_price, annual_diluted_eps]) and annual_diluted_eps > 0 else None
             ebitda = (ebit + depreciation) if all(v is not None for v in [ebit, depreciation]) else None
-            ev = (market_cap + long_term_debt + short_term_debt - cash) if all(v is not None for v in [market_cap, long_term_debt, short_term_debt, cash]) else None
+            ev = (metrics["market_cap"] + long_term_debt + short_term_debt - cash) if all(v is not None for v in [metrics["market_cap"], long_term_debt, short_term_debt, cash]) else None
             
-            pb_ratio = market_cap / book_value if all(v is not None for v in [market_cap, book_value]) and book_value > 0 else None
+            pb_ratio = metrics["market_cap"] / book_value if all(v is not None for v in [metrics["market_cap"], book_value]) and book_value > 0 else None
             ev_ebitda = ev / ebitda if all(v is not None for v in [ev, ebitda]) and ebitda > 0 else None
-            ps_ratio = market_cap / revenue if all(v is not None for v in [market_cap, revenue]) and revenue > 0 else None
+            ps_ratio = metrics["market_cap"] / revenue if all(v is not None for v in [metrics["market_cap"], revenue]) and revenue > 0 else None
 
-            return {
-                "market_cap": market_cap,
+            metrics.update({
                 "pe_ratio": pe_ratio,
                 "pb_ratio": pb_ratio,
                 "enterprise_value": ev,
                 "ebitda": ebitda,
                 "ebitda_ev": ev_ebitda,
                 "ps_ratio": ps_ratio,
-            }
+            })
+            return metrics
         except Exception as e:
-            logger.error(f"Error calculating valuation metrics for {ticker}: {e}", exc_info=True)
-            raise StockdexAPIError(f"Could not fetch valuation metrics for {ticker}") from e
+            logger.error(f"Error calculating valuation metrics for {ticker}: {e}", exc_info=False)
+            logger.warning(f"Could not fetch complete valuation metrics for {ticker}. Returning partial/empty metrics.")
+            return metrics
 
     def _parse_financial_number(self, value: Any) -> Optional[float]:
         """Convert string like '8.71B' or '439.26M' to float."""
@@ -309,6 +320,10 @@ class StockMetricsCalculator:
             "market_cap": 2e12,
             "pe_ratio": 25.0,
             "pb_ratio": 5.0,
+            "enterprise_value": 2.1e12,
+            "ebitda": 1.5e11,
+            "ebitda_ev": 14.0,
+            "ps_ratio": 10.0,
         }
 
 # Create global metrics calculator instance

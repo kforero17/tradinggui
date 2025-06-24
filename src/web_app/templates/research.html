@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stock Research</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: #121212;
+            color: #e0e0e0;
+            margin: 0;
+            padding: 2rem;
+        }
+        .container {
+            max-width: 1200px;
+            margin: auto;
+        }
+        h1 {
+            color: #ffffff;
+            text-align: center;
+        }
+        .flashes {
+            list-style: none;
+            padding: 0;
+            margin-bottom: 1rem;
+        }
+        .flashes li {
+            padding: 1rem;
+            margin-bottom: 0.5rem;
+            border-radius: 4px;
+        }
+        .flashes .success { background-color: #28a745; color: white; }
+        .flashes .error { background-color: #dc3545; color: white; }
+        .flashes .warning { background-color: #ffc107; color: black; }
+
+        form {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 2rem;
+            max-width: 800px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+        input[type="text"] {
+            flex-grow: 1;
+            padding: 0.75rem;
+            border: 1px solid #333;
+            background-color: #222;
+            color: #e0e0e0;
+            border-radius: 4px;
+        }
+        button {
+            padding: 0.75rem 1.5rem;
+            border: none;
+            background-color: #007bff;
+            color: white;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        .stock-card {
+            background-color: #1e1e1e;
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 1.5rem;
+            max-width: 800px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+        .stock-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+        }
+        .stock-header h2 {
+            margin: 0;
+            font-size: 2rem;
+        }
+        .add-portfolio-form {
+            margin-bottom: 0;
+            gap: 0;
+        }
+        .add-btn {
+            padding: 0.5rem 1rem;
+            background-color: #28a745;
+        }
+        .add-btn:hover {
+            background-color: #218838;
+        }
+        .in-portfolio-badge {
+            font-size: 0.9rem;
+            font-weight: bold;
+            padding: 0.5rem 1rem;
+            border-radius: 4px;
+            background-color: #17a2b8;
+            color: white;
+        }
+        .metrics-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 1.5rem;
+        }
+        .metrics-table th, .metrics-table td {
+            text-align: left;
+            padding: 0.75rem;
+            border-bottom: 1px solid #333;
+            width: 25%;
+        }
+        .metrics-table th {
+            color: #aaa;
+            font-weight: normal;
+        }
+        .plot-container {
+            min-height: 400px;
+        }
+        .nav-links {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+        .nav-links a {
+            color: #007bff;
+            text-decoration: none;
+            margin: 0 1rem;
+        }
+        .nav-links a:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Stock Research</h1>
+
+        <div class="nav-links">
+            <a href="{{ url_for('portfolio') }}">My Portfolio</a>
+            <a href="{{ url_for('research') }}">Research</a>
+        </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                <ul class="flashes">
+                {% for category, message in messages %}
+                    <li class="{{ category }}">{{ message }}</li>
+                {% endfor %}
+                </ul>
+            {% endif %}
+        {% endwith %}
+
+        <form action="{{ url_for('research') }}" method="post">
+            <input type="text" name="ticker" placeholder="Enter Ticker Symbol (e.g., AAPL, SPY)" value="{{ ticker if ticker }}">
+            <button type="submit">Research</button>
+        </form>
+        
+        {% if stock_data %}
+            <div class="stock-card">
+                <div class="stock-header">
+                    <h2>{{ stock_data.ticker }}</h2>
+                    {% if stock_data.ticker in portfolio_tickers %}
+                        <span class="in-portfolio-badge">In Portfolio</span>
+                    {% else %}
+                        <form action="{{ url_for('add_stock') }}" method="post" class="add-portfolio-form">
+                            <input type="hidden" name="ticker" value="{{ stock_data.ticker }}">
+                            <input type="hidden" name="source_page" value="research">
+                            <button type="submit" class="add-btn">Add to Portfolio</button>
+                        </form>
+                    {% endif %}
+                </div>
+                
+                <table class="metrics-table">
+                    <tr>
+                        <th>Last Price</th>
+                        <td>${{ "%.2f"|format(stock_data.last_price) if stock_data.last_price is not none else 'N/A' }}</td>
+                        <th>P/E Ratio</th>
+                        <td>{{ "%.2f"|format(stock_data.pe_ratio) if stock_data.pe_ratio is not none else 'N/A' }}</td>
+                    </tr>
+                    <tr>
+                        <th>Market Cap</th>
+                        <td>${{ "{:,.0f}".format(stock_data.market_cap) if stock_data.market_cap is not none else 'N/A' }}</td>
+                        <th>P/B Ratio</th>
+                        <td>{{ "%.2f"|format(stock_data.pb_ratio) if stock_data.pb_ratio is not none else 'N/A' }}</td>
+                    </tr>
+                    <tr>
+                        <th>P/S Ratio</th>
+                        <td>{{ "%.2f"|format(stock_data.ps_ratio) if stock_data.ps_ratio is not none else 'N/A' }}</td>
+                        <th>EV/EBITDA</th>
+                        <td>{{ "%.2f"|format(stock_data.ebitda_ev) if stock_data.ebitda_ev is not none else 'N/A' }}</td>
+                    </tr>
+                </table>
+
+                <div class="plot-container">
+                    {{ stock_data.plot|safe if stock_data.plot else '<p>No plot data available.</p>' }}
+                </div>
+            </div>
+        {% elif request.method == 'POST' %}
+            <p style="text-align: center;">No data found for the specified ticker.</p>
+        {% endif %}
+    </div>
+</body>
+</html> 
