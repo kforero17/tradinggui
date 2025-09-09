@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Momentum Stocks</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: #121212;
+            color: #e0e0e0;
+            margin: 0;
+            padding: 2rem;
+        }
+        .container {
+            max-width: 1400px;
+            margin: auto;
+        }
+        h1 {
+            color: #ffffff;
+            text-align: center;
+        }
+        .flashes {
+            list-style: none;
+            padding: 0;
+            margin-bottom: 1rem;
+        }
+        .flashes li {
+            padding: 1rem;
+            margin-bottom: 0.5rem;
+            border-radius: 4px;
+        }
+        .flashes .success { background-color: #28a745; color: white; }
+        .flashes .error { background-color: #dc3545; color: white; }
+        .flashes .warning { background-color: #ffc107; color: black; }
+
+        .nav-links {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+        .nav-links a {
+            color: #007bff;
+            text-decoration: none;
+            margin: 0 1rem;
+        }
+        .nav-links a:hover {
+            text-decoration: underline;
+        }
+        
+        .filters-container {
+            background-color: #1e1e1e;
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+        }
+        .filters-row {
+            display: flex;
+            gap: 2rem;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .filter-group {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            min-width: 200px;
+        }
+        .filter-group label {
+            color: #aaa;
+            font-size: 0.9rem;
+        }
+        .slider-container {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+        input[type="range"] {
+            flex-grow: 1;
+            min-width: 150px;
+        }
+        .slider-value {
+            font-weight: bold;
+            color: #007bff;
+            min-width: 80px;
+        }
+        .filter-button {
+            padding: 0.75rem 1.5rem;
+            border: none;
+            background-color: #007bff;
+            color: white;
+            border-radius: 4px;
+            cursor: pointer;
+            align-self: end;
+        }
+        .filter-button:hover {
+            background-color: #0056b3;
+        }
+        
+        .summary {
+            text-align: center;
+            margin-bottom: 1.5rem;
+            color: #aaa;
+        }
+        
+        .stocks-table {
+            background-color: #1e1e1e;
+            border: 1px solid #333;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        th, td {
+            padding: 1rem;
+            text-align: left;
+            border-bottom: 1px solid #333;
+        }
+        th {
+            background-color: #2a2a2a;
+            color: #aaa;
+            font-weight: normal;
+            position: sticky;
+            top: 0;
+        }
+        tr:hover {
+            background-color: #252525;
+        }
+        .ticker-cell {
+            font-weight: bold;
+            color: #007bff;
+            cursor: pointer;
+        }
+        .ticker-cell:hover {
+            text-decoration: underline;
+        }
+        .positive {
+            color: #28a745;
+        }
+        .negative {
+            color: #dc3545;
+        }
+        
+        /* Modal Styles */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.8);
+        }
+        .modal-content {
+            background-color: #1e1e1e;
+            margin: 5% auto;
+            padding: 2rem;
+            border-radius: 8px;
+            width: 90%;
+            max-width: 1000px;
+            max-height: 80%;
+            overflow-y: auto;
+            position: relative;
+        }
+        .close {
+            color: #aaa;
+            float: right;
+            font-size: 28px;
+            font-weight: bold;
+            cursor: pointer;
+            position: absolute;
+            right: 20px;
+            top: 15px;
+        }
+        .close:hover {
+            color: #fff;
+        }
+        .modal-title {
+            margin-top: 0;
+            color: #fff;
+        }
+        .loading {
+            text-align: center;
+            padding: 2rem;
+            color: #aaa;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Momentum Stocks</h1>
+
+        <div class="nav-links">
+            <a href="{{ url_for('portfolio') }}">My Portfolio</a>
+            <a href="{{ url_for('research') }}">Research</a>
+            <a href="{{ url_for('momentum') }}">Momentum</a>
+        </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                <ul class="flashes">
+                {% for category, message in messages %}
+                    <li class="{{ category }}">{{ message }}</li>
+                {% endfor %}
+                </ul>
+            {% endif %}
+        {% endwith %}
+
+        <div class="filters-container">
+            <div class="filters-row">
+                <div class="filter-group">
+                    <label for="marketCapSlider">Minimum Market Cap</label>
+                    <div class="slider-container">
+                        <input type="range" id="marketCapSlider" min="1" max="50" value="{{ (min_market_cap / 1e9) | round(1) }}" step="0.5">
+                        <span class="slider-value" id="marketCapValue">${{ (min_market_cap / 1e9) | round(1) }}B</span>
+                    </div>
+                </div>
+                
+                <div class="filter-group">
+                    <label for="momentumSlider">Minimum % Above 100-Day MA</label>
+                    <div class="slider-container">
+                        <input type="range" id="momentumSlider" min="-20" max="50" value="{{ min_momentum_pct }}" step="1">
+                        <span class="slider-value" id="momentumValue">{{ min_momentum_pct }}%</span>
+                    </div>
+                </div>
+                
+                <button class="filter-button" onclick="applyFilters()">Apply Filters</button>
+            </div>
+        </div>
+
+        <div class="summary">
+            Showing {{ total_count }} stocks with market cap ≥ ${{ (min_market_cap / 1e9) | round(1) }}B and momentum ≥ {{ min_momentum_pct }}%
+        </div>
+
+        <div class="stocks-table">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Ticker</th>
+                        <th>Last Price</th>
+                        <th>% Above MA100</th>
+                        <th>% Above EMA100</th>
+                        <th>Market Cap</th>
+                        <th>P/E Ratio</th>
+                        <th>P/B Ratio</th>
+                        <th>P/S Ratio</th>
+                        <th>EV/EBITDA</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for stock in stocks %}
+                        <tr>
+                            <td class="ticker-cell" onclick="showStockPlot('{{ stock.ticker }}')">{{ stock.ticker }}</td>
+                            <td>${{ "%.2f"|format(stock.last_price) if stock.last_price is not none else 'N/A' }}</td>
+                            <td class="{{ 'positive' if stock.pct_above_ma_100 and stock.pct_above_ma_100 > 0 else 'negative' }}">
+                                {{ "%.2f"|format(stock.pct_above_ma_100) if stock.pct_above_ma_100 is not none else 'N/A' }}%
+                            </td>
+                            <td class="{{ 'positive' if stock.pct_above_ema_100 and stock.pct_above_ema_100 > 0 else 'negative' }}">
+                                {{ "%.2f"|format(stock.pct_above_ema_100) if stock.pct_above_ema_100 is not none else 'N/A' }}%
+                            </td>
+                            <td>${{ "{:,.0f}".format(stock.market_cap / 1e9) if stock.market_cap is not none else 'N/A' }}B</td>
+                            <td>{{ "%.2f"|format(stock.pe_ratio) if stock.pe_ratio is not none else 'N/A' }}</td>
+                            <td>{{ "%.2f"|format(stock.pb_ratio) if stock.pb_ratio is not none else 'N/A' }}</td>
+                            <td>{{ "%.2f"|format(stock.ps_ratio) if stock.ps_ratio is not none else 'N/A' }}</td>
+                            <td>{{ "%.2f"|format(stock.ebitda_ev) if stock.ebitda_ev is not none else 'N/A' }}</td>
+                        </tr>
+                    {% else %}
+                        <tr>
+                            <td colspan="9" style="text-align: center; padding: 2rem; color: #aaa;">
+                                No stocks found matching the current criteria.
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Modal for Stock Plot -->
+    <div id="stockModal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeModal()">&times;</span>
+            <h2 class="modal-title" id="modalTitle">Stock Chart</h2>
+            <div id="modalContent" class="loading">Loading chart...</div>
+        </div>
+    </div>
+
+    <script>
+        // Update slider values
+        document.getElementById('marketCapSlider').addEventListener('input', function() {
+            document.getElementById('marketCapValue').textContent = '$' + this.value + 'B';
+        });
+
+        document.getElementById('momentumSlider').addEventListener('input', function() {
+            document.getElementById('momentumValue').textContent = this.value + '%';
+        });
+
+        // Apply filters
+        function applyFilters() {
+            const marketCap = document.getElementById('marketCapSlider').value * 1e9;
+            const momentum = document.getElementById('momentumSlider').value;
+            
+            const url = new URL(window.location);
+            url.searchParams.set('min_market_cap', marketCap);
+            url.searchParams.set('min_momentum_pct', momentum);
+            
+            window.location.href = url.toString();
+        }
+
+        // Show stock plot in modal
+        function showStockPlot(ticker) {
+            const modal = document.getElementById('stockModal');
+            const modalTitle = document.getElementById('modalTitle');
+            const modalContent = document.getElementById('modalContent');
+            
+            modalTitle.textContent = ticker + ' Chart';
+            modalContent.innerHTML = '<div class="loading">Loading chart...</div>';
+            modal.style.display = 'block';
+            
+            fetch('/get_stock_plot/' + ticker)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        modalContent.innerHTML = data.plot;
+                    } else {
+                        modalContent.innerHTML = '<p style="color: #dc3545;">Error: ' + data.error + '</p>';
+                    }
+                })
+                .catch(error => {
+                    modalContent.innerHTML = '<p style="color: #dc3545;">Error loading chart: ' + error.message + '</p>';
+                });
+        }
+
+        // Close modal
+        function closeModal() {
+            document.getElementById('stockModal').style.display = 'none';
+        }
+
+        // Close modal when clicking outside
+        window.onclick = function(event) {
+            const modal = document.getElementById('stockModal');
+            if (event.target === modal) {
+                modal.style.display = 'none';
+            }
+        }
+    </script>
+</body>
+</html> 

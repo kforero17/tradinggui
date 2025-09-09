@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 import pandas as pd
 import numpy as np
 from loguru import logger
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type, RetryError
 import time
 import random
 import requests
@@ -79,7 +79,11 @@ class StockMetricsCalculator:
         start_date = today - timedelta(days=self.lookback_days)
         
         logger.info(f"Fetching historical data for {ticker} from {start_date.date()} to {today.date()}")
-        return self._get_historical_data_from_stockdex(ticker, start_date, today)
+        try:
+            return self._get_historical_data_from_stockdex(ticker, start_date, today)
+        except (StockdexAPIError, RetryError) as e:
+            logger.error(f"Failed to fetch historical data for {ticker}: {e}")
+            return None
 
     @retry(
         stop=stop_after_attempt(3),
