@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Momentum Stocks</title>
+    <script src="https://cdn.plot.ly/plotly-2.26.0.min.js"></script>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
@@ -187,6 +188,31 @@
             padding: 2rem;
             color: #aaa;
         }
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+        .metric-card {
+            background-color: #2a2a2a;
+            padding: 1rem;
+            border-radius: 6px;
+            border: 1px solid #333;
+        }
+        .metric-label {
+            color: #aaa;
+            font-size: 0.85rem;
+            margin-bottom: 0.25rem;
+        }
+        .metric-value {
+            color: #fff;
+            font-size: 1.25rem;
+            font-weight: bold;
+        }
+        .chart-container {
+            margin-top: 1.5rem;
+        }
     </style>
 </head>
 <body>
@@ -315,21 +341,108 @@
             const modal = document.getElementById('stockModal');
             const modalTitle = document.getElementById('modalTitle');
             const modalContent = document.getElementById('modalContent');
-            
+
             modalTitle.textContent = ticker + ' Chart';
             modalContent.innerHTML = '<div class="loading">Loading chart...</div>';
             modal.style.display = 'block';
-            
+
+            console.log('Fetching data for ticker:', ticker);
+
             fetch('/get_stock_plot/' + ticker)
-                .then(response => response.json())
+                .then(response => {
+                    console.log('Response status:', response.status);
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    return response.json();
+                })
                 .then(data => {
+                    console.log('Received data:', data);
+
                     if (data.success) {
-                        modalContent.innerHTML = data.plot;
+                        let html = '';
+
+                        if (data.metrics) {
+                            console.log('Rendering metrics');
+                            html += '<div class="metrics-grid">';
+
+                            const formatValue = (value, suffix = '') => {
+                                if (value === null || value === undefined) return 'N/A';
+                                if (typeof value === 'number') {
+                                    return value.toFixed(2) + suffix;
+                                }
+                                return value + suffix;
+                            };
+
+                            const formatCurrency = (value) => {
+                                if (value === null || value === undefined) return 'N/A';
+                                return '$' + value.toFixed(2);
+                            };
+
+                            const formatMarketCap = (value) => {
+                                if (value === null || value === undefined) return 'N/A';
+                                return '$' + (value / 1e9).toFixed(2) + 'B';
+                            };
+
+                            const colorClass = (value) => {
+                                if (value === null || value === undefined) return '';
+                                return value > 0 ? 'positive' : 'negative';
+                            };
+
+                            html += `
+                                <div class="metric-card">
+                                    <div class="metric-label">Last Price</div>
+                                    <div class="metric-value">${formatCurrency(data.metrics.last_price)}</div>
+                                </div>
+                                <div class="metric-card">
+                                    <div class="metric-label">% Above MA100</div>
+                                    <div class="metric-value ${colorClass(data.metrics.pct_above_ma_100)}">${formatValue(data.metrics.pct_above_ma_100, '%')}</div>
+                                </div>
+                                <div class="metric-card">
+                                    <div class="metric-label">% Above EMA100</div>
+                                    <div class="metric-value ${colorClass(data.metrics.pct_above_ema_100)}">${formatValue(data.metrics.pct_above_ema_100, '%')}</div>
+                                </div>
+                                <div class="metric-card">
+                                    <div class="metric-label">Market Cap</div>
+                                    <div class="metric-value">${formatMarketCap(data.metrics.market_cap)}</div>
+                                </div>
+                                <div class="metric-card">
+                                    <div class="metric-label">P/E Ratio</div>
+                                    <div class="metric-value">${formatValue(data.metrics.pe_ratio)}</div>
+                                </div>
+                                <div class="metric-card">
+                                    <div class="metric-label">P/B Ratio</div>
+                                    <div class="metric-value">${formatValue(data.metrics.pb_ratio)}</div>
+                                </div>
+                                <div class="metric-card">
+                                    <div class="metric-label">P/S Ratio</div>
+                                    <div class="metric-value">${formatValue(data.metrics.ps_ratio)}</div>
+                                </div>
+                                <div class="metric-card">
+                                    <div class="metric-label">EV/EBITDA</div>
+                                    <div class="metric-value">${formatValue(data.metrics.ebitda_ev)}</div>
+                                </div>
+                            `;
+                            html += '</div>';
+                        }
+
+                            html += '<div class="chart-container"><div id="stockChart"></div></div>';
+
+                        console.log('Setting modal content');
+                        modalContent.innerHTML = html;
+
+                        if (data.plot_data) {
+                            console.log('Rendering plot with Plotly.newPlot');
+                            const plotData = JSON.parse(data.plot_data);
+                            Plotly.newPlot('stockChart', plotData.data, plotData.layout, {displayModeBar: true, responsive: true});
+                        }
                     } else {
-                        modalContent.innerHTML = '<p style="color: #dc3545;">Error: ' + data.error + '</p>';
+                        console.error('Error from server:', data.error);
+                        modalContent.innerHTML = '<p style="color: #dc3545;">Error: ' + (data.error || 'Unknown error') + '</p>';
                     }
                 })
                 .catch(error => {
+                    console.error('Fetch error:', error);
                     modalContent.innerHTML = '<p style="color: #dc3545;">Error loading chart: ' + error.message + '</p>';
                 });
         }

@@ -1,3 +1,8 @@
+# Configure SSL verification BEFORE importing yfinance
+# yfinance uses curl_cffi which requires environment variables set before import
+from ..config.ssl_config import configure_ssl_verification
+configure_ssl_verification()
+
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timedelta
 import pandas as pd
@@ -5,13 +10,29 @@ import numpy as np
 from loguru import logger
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type, RetryError
 import time
-import random
-import requests
-from stockdex import Ticker
+import threading
+import yfinance as yf
 from concurrent.futures import ThreadPoolExecutor
 
 from ..config.settings import settings
 from ..data.database import db
+
+
+class RateLimiter:
+    """Thread-safe rate limiter to prevent API throttling."""
+
+    def __init__(self, calls_per_second: float = 0.5):
+        self.min_interval = 1.0 / calls_per_second
+        self.last_call = 0.0
+        self.lock = threading.Lock()
+
+    def wait(self):
+        with self.lock:
+            now = time.time()
+            elapsed = now - self.last_call
+            if elapsed < self.min_interval:
+                time.sleep(self.min_interval - elapsed)
+            self.last_call = time.time()
 
 class StockdexAPIError(Exception):
     """Custom exception for Stockdex API errors."""
@@ -22,77 +43,101 @@ class StockMetricsCalculator:
         self.lookback_days = settings.HISTORICAL_LOOKBACK_DAYS
         self.use_mock_data = use_mock_data
         self.recent_data_age_limit_days = settings.RECENT_DATA_AGE_LIMIT_DAYS
+        self.rate_limiter = RateLimiter(calls_per_second=settings.REQUESTS_PER_SECOND)
         
     @retry(
         stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=2, max=10),
+        wait=wait_exponential(multiplier=1, min=4, max=30),
         retry=retry_if_exception_type(StockdexAPIError)
     )
-    def _get_historical_data_from_stockdex(self, ticker: str, start_date: datetime, end_date: datetime) -> Optional[pd.DataFrame]:
-        """Fetch historical data from Stockdex (via Yahoo Finance)."""
+    def _get_historical_data_from_yfinance(self, ticker: str, start_date: datetime, end_date: datetime) -> Optional[pd.DataFrame]:
+        """Fetch historical data from yfinance (via Yahoo Finance)."""
+        self.rate_limiter.wait()
+
         try:
-            # Determine the appropriate range string for the stockdex API call
-            delta_days = (end_date - start_date).days
-            if delta_days <= 30:
-                api_range = '1mo'
-            elif delta_days <= 90:
-                api_range = '3mo'
-            elif delta_days <= 180:
-                api_range = '6mo'
-            elif delta_days <= 365:
-                api_range = '1y'
-            elif delta_days <= 730:
-                api_range = '2y'
-            else:
-                api_range = '5y'
+            stock = yf.Ticker(ticker)
+            df = stock.history(start=start_date, end=end_date, auto_adjust=True)
 
-            stock = Ticker(ticker)
-            df = stock.yahoo_api_price(range=api_range, dataGranularity='1d')
-            
             if df.empty:
-                logger.warning(f"No new historical data for {ticker} from {start_date.date()} to {end_date.date()}.")
+                logger.warning(f"No historical data for {ticker} from {start_date.date()} to {end_date.date()}.")
                 return None
 
-            # The `timestamp` column should be datetime. Filter based on it.
-            df = df[df['timestamp'] >= start_date]
-            
-            if df.empty:
-                logger.warning(f"No historical data for {ticker} in the specified date range.")
-                return None
-
-            df.set_index('timestamp', inplace=True)
             df.index.name = 't'
-            
-            # Select only the needed columns
-            return df[['open', 'high', 'low', 'close', 'volume']]
+            df.columns = df.columns.str.lower()
+
+            required_cols = ['open', 'high', 'low', 'close', 'volume']
+            available_cols = [col for col in required_cols if col in df.columns]
+
+            if not available_cols:
+                logger.warning(f"No required columns found in data for {ticker}")
+                return None
+
+            return df[available_cols]
 
         except Exception as e:
-            logger.error(f"Failed to fetch historical data for {ticker} using Stockdex: {e}")
+            error_msg = str(e)
+            if "Too Many Requests" in error_msg or "Rate limited" in error_msg:
+                logger.warning(f"Rate limited for {ticker}, will retry...")
+                raise StockdexAPIError(f"Rate limited for {ticker}") from e
+            logger.error(f"Failed to fetch historical data for {ticker} using yfinance: {e}")
             raise StockdexAPIError(f"Could not fetch historical data for {ticker}") from e
 
+    def _get_historical_data_from_stockdex(self, ticker: str, start_date: datetime, end_date: datetime) -> Optional[pd.DataFrame]:
+        """Fallback: Fetch historical data from StockDex library."""
+        self.rate_limiter.wait()
+
+        try:
+            from stockdex import Ticker as StockdexTicker
+            stock = StockdexTicker(ticker=ticker)
+            df = stock.price(range='1y')
+
+            if df is None or df.empty:
+                logger.warning(f"No StockDex data for {ticker}")
+                return None
+
+            df.columns = df.columns.str.lower()
+
+            required_cols = ['open', 'high', 'low', 'close', 'volume']
+            available_cols = [col for col in required_cols if col in df.columns]
+
+            if not available_cols:
+                return None
+
+            return df[available_cols]
+
+        except Exception as e:
+            logger.error(f"StockDex also failed for {ticker}: {e}")
+            return None
+
     def _get_historical_data(self, ticker: str) -> Optional[pd.DataFrame]:
-        """Get historical data directly from the API."""
+        """Get historical data with yfinance primary and StockDex fallback."""
         if self.use_mock_data:
             return self._generate_mock_historical_data(ticker)
 
         today = datetime.utcnow()
         start_date = today - timedelta(days=self.lookback_days)
-        
+
         logger.info(f"Fetching historical data for {ticker} from {start_date.date()} to {today.date()}")
+
+        # Try yfinance first
         try:
-            return self._get_historical_data_from_stockdex(ticker, start_date, today)
+            df = self._get_historical_data_from_yfinance(ticker, start_date, today)
+            if df is not None:
+                return df
         except (StockdexAPIError, RetryError) as e:
-            logger.error(f"Failed to fetch historical data for {ticker}: {e}")
-            return None
+            logger.warning(f"yfinance failed for {ticker}: {e}")
+
+        # Fallback to StockDex
+        logger.info(f"Trying StockDex fallback for {ticker}")
+        return self._get_historical_data_from_stockdex(ticker, start_date, today)
 
     @retry(
         stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=2, max=10),
+        wait=wait_exponential(multiplier=1, min=4, max=30),
         retry=retry_if_exception_type(StockdexAPIError)
     )
     def _get_valuation_metrics(self, ticker: str, last_price: Optional[float] = None) -> Dict[str, Any]:
-        """Fetch and compute valuation metrics from Stockdex (via Yahoo Finance)."""
-        # Define a default metrics dictionary to ensure all keys are always present.
+        """Fetch and compute valuation metrics from yfinance (via Yahoo Finance)."""
         metrics = {
             "market_cap": None, "pe_ratio": None, "pb_ratio": None,
             "enterprise_value": None, "ebitda": None, "ebitda_ev": None,
@@ -103,81 +148,57 @@ class StockMetricsCalculator:
             mock_data = self._generate_mock_valuation_data(ticker)
             metrics.update(mock_data)
             return metrics
-        
+
         if last_price is None:
             logger.warning(f"Cannot calculate valuation metrics for {ticker} without a share price.")
             return metrics
 
+        self.rate_limiter.wait()
+
         try:
-            stock = Ticker(ticker)
+            stock = yf.Ticker(ticker)
+            info = stock.info
             
-            # --- 1. Get Summary Data (Market Cap, Quote Type) ---
-            raw_summary = stock.yahoo_web_summary
-            summary = {}
-
-            if isinstance(raw_summary, dict):
-                summary = raw_summary
-            elif isinstance(raw_summary, pd.DataFrame) and not raw_summary.empty:
-                summary = raw_summary.iloc[:, 0].to_dict()
-
-            if summary:
-                quote_type_data = summary.get('quoteType')
-                quote_type = quote_type_data.get('raw') if isinstance(quote_type_data, dict) else quote_type_data
-                
-                market_cap_data = summary.get('marketCap')
-                market_cap = self._parse_financial_number(
-                    market_cap_data.get('raw') if isinstance(market_cap_data, dict) else market_cap_data
-                )
-                metrics["market_cap"] = market_cap
-
-                if quote_type == 'ETF':
-                    logger.info(f"{ticker} is an ETF. Standard valuation metrics are not applicable.")
-                    return metrics  # Return with just market_cap and Nones for the rest
-            else:
-                logger.warning(f"Could not parse summary data for {ticker}.")
-
-            # --- 2. Get other metrics from financials and balance sheet ---
-            financials_df = stock.yahoo_api_financials(frequency='annual')
-            balance_sheet_df = stock.yahoo_api_balance_sheet(frequency='annual')
-
-            if financials_df.empty or balance_sheet_df.empty:
-                logger.warning(f"Could not retrieve full financial or balance sheet data for {ticker}. Metrics will be incomplete.")
+            if not info:
+                logger.warning(f"Could not fetch info for {ticker}")
                 return metrics
             
-            financials = financials_df.iloc[0].to_dict()
-            balance_sheet = balance_sheet_df.iloc[0].to_dict()
+            # --- 1. Get Market Cap and Quote Type ---
+            quote_type = info.get('quoteType', '')
+            market_cap = info.get('marketCap', None)
+            metrics["market_cap"] = market_cap
 
-            revenue = self._parse_financial_number(financials.get('annualTotalRevenue'))
-            ebit = self._parse_financial_number(financials.get('annualEBIT'))
-            depreciation = self._parse_financial_number(financials.get('annualReconciledDepreciation'))
-            annual_diluted_eps = self._parse_financial_number(financials.get('annualDilutedEPS'))
+            if quote_type == 'ETF':
+                logger.info(f"{ticker} is an ETF. Standard valuation metrics are not applicable.")
+                return metrics  # Return with just market_cap and Nones for the rest
 
-            cash = self._parse_financial_number(balance_sheet.get('annualCashAndCashEquivalents'))
-            long_term_debt = self._parse_financial_number(balance_sheet.get('annualLongTermDebt'))
-            short_term_debt = self._parse_financial_number(balance_sheet.get('annualCurrentDebtAndCapitalLeaseObligation'))
-            book_value = self._parse_financial_number(balance_sheet.get('annualTotalEquityGrossMinorityInterest'))
-
-            # --- 3. Calculate Derived Metrics ---
-            pe_ratio = last_price / annual_diluted_eps if all(v is not None for v in [last_price, annual_diluted_eps]) and annual_diluted_eps > 0 else None
-            ebitda = (ebit + depreciation) if all(v is not None for v in [ebit, depreciation]) else None
-            ev = (metrics["market_cap"] + long_term_debt + short_term_debt - cash) if all(v is not None for v in [metrics["market_cap"], long_term_debt, short_term_debt, cash]) else None
+            # --- 2. Get valuation metrics directly from info ---
+            pe_ratio = info.get('trailingPE', None)
+            pb_ratio = info.get('priceToBook', None)
+            ps_ratio = info.get('priceToSalesTrailing12Months', None)
+            enterprise_value = info.get('enterpriseValue', None)
+            ebitda = info.get('ebitda', None)
             
-            pb_ratio = metrics["market_cap"] / book_value if all(v is not None for v in [metrics["market_cap"], book_value]) and book_value > 0 else None
-            ev_ebitda = ev / ebitda if all(v is not None for v in [ev, ebitda]) and ebitda > 0 else None
-            ps_ratio = metrics["market_cap"] / revenue if all(v is not None for v in [metrics["market_cap"], revenue]) and revenue > 0 else None
+            # Calculate EV/EBITDA if both are available
+            ev_ebitda = None
+            if enterprise_value and ebitda and ebitda > 0:
+                ev_ebitda = enterprise_value / ebitda
 
             metrics.update({
                 "pe_ratio": pe_ratio,
                 "pb_ratio": pb_ratio,
-                "enterprise_value": ev,
+                "enterprise_value": enterprise_value,
                 "ebitda": ebitda,
                 "ebitda_ev": ev_ebitda,
                 "ps_ratio": ps_ratio,
             })
             return metrics
         except Exception as e:
+            error_msg = str(e)
+            if "Too Many Requests" in error_msg or "Rate limited" in error_msg:
+                logger.warning(f"Rate limited for {ticker} valuation, will retry...")
+                raise StockdexAPIError(f"Rate limited for {ticker}") from e
             logger.error(f"Error calculating valuation metrics for {ticker}: {e}", exc_info=False)
-            logger.warning(f"Could not fetch complete valuation metrics for {ticker}. Returning partial/empty metrics.")
             return metrics
 
     def _parse_financial_number(self, value: Any) -> Optional[float]:
@@ -251,18 +272,19 @@ class StockMetricsCalculator:
             logger.warning(f"Could not get metrics for {ticker}: {e}")
             return None
         except StockdexAPIError as e:
-            logger.error(f"Stockdex API error for {ticker}: {e}")
+            logger.error(f"Yahoo Finance API error for {ticker}: {e}")
             return None
         except Exception as e:
             logger.error(f"Unexpected error processing {ticker}: {e}")
             return None
 
-    def get_metrics_batch(self, tickers: List[str], max_workers: int = 10) -> List[Dict[str, Any]]:
-        """Get metrics for multiple tickers in parallel."""
+    def get_metrics_batch(self, tickers: List[str], max_workers: int = None) -> List[Dict[str, Any]]:
+        """Get metrics for multiple tickers in parallel with rate limiting."""
+        max_workers = max_workers or settings.MAX_CONCURRENT_WORKERS
         all_metrics = []
         total_tickers = len(tickers)
-        
-        logger.info(f"Processing {total_tickers} tickers in batch.")
+
+        logger.info(f"Processing {total_tickers} tickers with {max_workers} workers (rate: {settings.REQUESTS_PER_SECOND}/sec).")
 
         # 1. Filter out tickers that have been updated recently
         tickers_to_process = [

@@ -7,89 +7,104 @@ import plotly.io as pio
 
 from ..data.database import db
 from ..analysis.metrics import metrics_calculator
+from ..config.security import security_config
 
 app = Flask(__name__)
-app.secret_key = "supersecretkey"  # TODO: Use an environment variable for this
+app.secret_key = security_config.get_secret_key()
 
-def create_stock_plot(hist_data: pd.DataFrame, ticker: str) -> Optional[str]:
-    """Generate an interactive plot for a stock's historical data."""
+def _build_stock_figure(hist_data: pd.DataFrame, ticker: str) -> Optional[go.Figure]:
+    """Build a Plotly figure for a stock's historical data."""
     if hist_data is None or hist_data.empty:
         logger.warning(f"No data provided for {ticker} plot")
         return None
-    
-    try:
-        fig = go.Figure()
-        
-        # Ensure we have the required columns
-        if 'close' not in hist_data.columns:
-            logger.error(f"Missing 'close' column in data for {ticker}")
-            return None
-        
-        # Clean the data
-        close_prices = hist_data['close'].dropna()
-        if close_prices.empty:
-            logger.error(f"No valid close prices for {ticker}")
-            return None
-        
-        # Price Line
+
+    if 'close' not in hist_data.columns:
+        logger.error(f"Missing 'close' column in data for {ticker}")
+        return None
+
+    close_prices = hist_data['close'].dropna()
+    if close_prices.empty:
+        logger.error(f"No valid close prices for {ticker}")
+        return None
+
+    dates = [d.strftime('%Y-%m-%d') for d in close_prices.index]
+    prices = close_prices.values.tolist()
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Scatter(
+        x=dates,
+        y=prices,
+        mode='lines',
+        name='Close Price',
+        line=dict(color='#00D4AA', width=2)
+    ))
+
+    if len(close_prices) >= 100:
+        ma_100 = close_prices.rolling(window=100).mean().dropna()
+        ma_dates = [d.strftime('%Y-%m-%d') for d in ma_100.index]
         fig.add_trace(go.Scatter(
-            x=close_prices.index, 
-            y=close_prices, 
-            mode='lines', 
-            name='Close Price',
-            line=dict(color='#00D4AA', width=2)
+            x=ma_dates,
+            y=ma_100.values.tolist(),
+            mode='lines',
+            name='100-Day MA',
+            line=dict(color='#FF6B6B', width=1.5)
         ))
-        
-        # 100-day MA (only if we have enough data)
-        if len(close_prices) >= 100:
-            ma_100 = close_prices.rolling(window=100).mean().dropna()
-            fig.add_trace(go.Scatter(
-                x=ma_100.index, 
-                y=ma_100, 
-                mode='lines', 
-                name='100-Day MA',
-                line=dict(color='#FF6B6B', width=1.5)
-            ))
-        
-        # 100-day EMA (only if we have enough data)
-        if len(close_prices) >= 100:
-            ema_100 = close_prices.ewm(span=100, adjust=False).mean().dropna()
-            fig.add_trace(go.Scatter(
-                x=ema_100.index, 
-                y=ema_100, 
-                mode='lines', 
-                name='100-Day EMA',
-                line=dict(color='#4ECDC4', width=1.5)
-            ))
-        
-        fig.update_layout(
-            title=f'{ticker.upper()} Price Action',
-            xaxis_title='Date',
-            yaxis_title='Price (USD)',
-            legend=dict(
-                yanchor="top",
-                y=0.99,
-                xanchor="left",
-                x=0.01
-            ),
-            template='plotly_dark',
-            height=500,
-            margin=dict(t=50, b=50, l=50, r=50)
-        )
-        
-        # Configure plot to include necessary dependencies
+
+        ema_100 = close_prices.ewm(span=100, adjust=False).mean().dropna()
+        ema_dates = [d.strftime('%Y-%m-%d') for d in ema_100.index]
+        fig.add_trace(go.Scatter(
+            x=ema_dates,
+            y=ema_100.values.tolist(),
+            mode='lines',
+            name='100-Day EMA',
+            line=dict(color='#4ECDC4', width=1.5)
+        ))
+
+    fig.update_layout(
+        title=f'{ticker.upper()} Price Action',
+        xaxis_title='Date',
+        yaxis_title='Price (USD)',
+        legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01),
+        template='plotly_dark',
+        height=500,
+        margin=dict(t=50, b=50, l=50, r=50)
+    )
+
+    return fig
+
+
+def create_stock_plot(hist_data: pd.DataFrame, ticker: str) -> Optional[str]:
+    """Generate an HTML plot for embedding in pages (includes Plotly CDN)."""
+    try:
+        fig = _build_stock_figure(hist_data, ticker)
+        if fig is None:
+            return None
+
         plot_html = pio.to_html(
-            fig, 
-            full_html=False, 
+            fig,
+            full_html=False,
             include_plotlyjs='cdn',
             config={'displayModeBar': True, 'responsive': True}
         )
-        
         logger.info(f"Successfully created plot for {ticker}")
         return plot_html
-        
     except Exception as e:
         logger.error(f"Error creating plot for {ticker}: {e}", exc_info=True)
+        return None
+
+
+def create_stock_plot_json(hist_data: pd.DataFrame, ticker: str) -> Optional[str]:
+    """Generate Plotly figure data as JSON string for dynamic rendering in modals."""
+    try:
+        fig = _build_stock_figure(hist_data, ticker)
+        if fig is None:
+            return None
+
+        logger.info(f"Successfully created plot JSON for {ticker}")
+        return fig.to_json()
+    except Exception as e:
+        logger.error(f"Error creating plot JSON for {ticker}: {e}", exc_info=True)
         return None
 
 def filter_momentum_stocks(min_market_cap: float = 2e9, min_momentum_pct: float = 0.0) -> pd.DataFrame:
@@ -147,28 +162,64 @@ def momentum():
 def get_stock_plot(ticker: str):
     """API endpoint to get stock plot for modal display."""
     try:
-        logger.info(f"Fetching plot data for {ticker}")
-        hist_data = metrics_calculator._get_historical_data(ticker)
-        
+        logger.info(f"==== Starting get_stock_plot for {ticker} ====")
+
+        logger.info(f"Step 1: Fetching historical data for {ticker}")
+        try:
+            hist_data = metrics_calculator._get_historical_data(ticker)
+            logger.info(f"Historical data fetch completed. Data is None: {hist_data is None}")
+            if hist_data is not None:
+                logger.info(f"Historical data is empty: {hist_data.empty}")
+        except Exception as fetch_error:
+            logger.error(f"Exception while fetching historical data: {fetch_error}", exc_info=True)
+            return jsonify({'success': False, 'error': f'Failed to fetch historical data: {str(fetch_error)}'})
+
         if hist_data is None or hist_data.empty:
             logger.warning(f"No historical data available for {ticker}")
             return jsonify({'success': False, 'error': f'No historical data available for {ticker}'})
-        
+
         logger.info(f"Historical data shape for {ticker}: {hist_data.shape}")
         logger.info(f"Historical data columns: {list(hist_data.columns)}")
         logger.info(f"Date range: {hist_data.index.min()} to {hist_data.index.max()}")
-        
-        plot_html = create_stock_plot(hist_data, ticker)
-        
-        if plot_html:
-            logger.success(f"Successfully generated plot for {ticker}")
-            return jsonify({'success': True, 'plot': plot_html})
-        else:
-            logger.error(f"Failed to generate plot HTML for {ticker}")
+
+        logger.info(f"Step 2: Creating plot for {ticker}")
+        try:
+            plot_data = create_stock_plot_json(hist_data, ticker)
+            logger.info(f"Plot creation completed. Plot is None: {plot_data is None}")
+        except Exception as plot_error:
+            logger.error(f"Exception while creating plot: {plot_error}", exc_info=True)
+            return jsonify({'success': False, 'error': f'Failed to create plot: {str(plot_error)}'})
+
+        if not plot_data:
+            logger.error(f"Failed to generate plot data for {ticker}")
             return jsonify({'success': False, 'error': 'Failed to generate plot'})
+
+        logger.info(f"Step 3: Fetching metrics for {ticker}")
+        try:
+            metrics_df = db.get_latest_metrics(ticker=ticker)
+            logger.info(f"Metrics fetch completed. DataFrame is empty: {metrics_df.empty}")
+        except Exception as metrics_error:
+            logger.error(f"Exception while fetching metrics: {metrics_error}", exc_info=True)
+            metrics_df = pd.DataFrame()
+
+        metrics = None
+        if not metrics_df.empty:
+            metrics = metrics_df.iloc[0].to_dict()
+            logger.info(f"Found metrics for {ticker}: {list(metrics.keys())}")
+        else:
+            logger.warning(f"No metrics found in database for {ticker}")
+
+        logger.success(f"Successfully generated response for {ticker}")
+        response_data = {
+            'success': True,
+            'plot_data': plot_data,
+            'metrics': metrics
+        }
+        logger.info(f"Response keys: {list(response_data.keys())}")
+        return jsonify(response_data)
     except Exception as e:
-        logger.error(f"Error generating plot for {ticker}: {e}", exc_info=True)
-        return jsonify({'success': False, 'error': str(e)})
+        logger.error(f"Unexpected error in get_stock_plot for {ticker}: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': f'Unexpected error: {str(e)}'})
 
 @app.route('/research', methods=['GET', 'POST'])
 def research():

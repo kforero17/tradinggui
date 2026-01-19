@@ -20,7 +20,10 @@ class Settings(BaseSettings):
     # API Settings
     HISTORICAL_LOOKBACK_DAYS: int = 400
     RECENT_DATA_AGE_LIMIT_DAYS: int = 1
-    YAHOO_FIN_RATE_LIMIT: int = 1 # seconds between requests
+
+    # Rate Limiting
+    MAX_CONCURRENT_WORKERS: int = 3
+    REQUESTS_PER_SECOND: float = 0.5  # 1 request per 2 seconds
     
     # Data Sources
     SP500_CSV_PATH: Path = RAW_DATA_DIR / "sp500.csv"
@@ -42,6 +45,7 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = True
+        extra = "ignore"
 
 # Create global settings instance
 settings = Settings()
