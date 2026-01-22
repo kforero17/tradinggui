@@ -13,7 +13,7 @@
             padding: 2rem;
         }
         .container {
-            max-width: 1200px;
+            max-width: 1400px;
             margin: auto;
         }
         h1 {
@@ -34,18 +34,90 @@
         .flashes .error { background-color: #dc3545; color: white; }
         .flashes .warning { background-color: #ffc107; color: black; }
 
-        form {
+        .nav-links {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+        .nav-links a {
+            color: #007bff;
+            text-decoration: none;
+            margin: 0 1rem;
+        }
+        .nav-links a:hover {
+            text-decoration: underline;
+        }
+
+        /* Portfolio Summary */
+        .portfolio-summary {
+            display: flex;
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+        .summary-card {
+            background-color: #1e1e1e;
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 1.25rem 2rem;
+            text-align: center;
+            min-width: 200px;
+        }
+        .summary-card.total-value {
+            border-color: #007bff;
+        }
+        .summary-card.positive {
+            border-color: #28a745;
+        }
+        .summary-card.negative {
+            border-color: #dc3545;
+        }
+        .summary-label {
+            color: #aaa;
+            font-size: 0.9rem;
+            margin-bottom: 0.5rem;
+        }
+        .summary-value {
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: #fff;
+        }
+        .summary-percent {
+            font-size: 1rem;
+            font-weight: normal;
+        }
+        .positive .summary-value,
+        .positive .summary-percent,
+        td.positive {
+            color: #28a745;
+        }
+        .negative .summary-value,
+        .negative .summary-percent,
+        td.negative {
+            color: #dc3545;
+        }
+
+        /* Add Stock Form */
+        .add-stock-form {
             display: flex;
             gap: 1rem;
             margin-bottom: 2rem;
+            justify-content: center;
+            flex-wrap: wrap;
         }
-        input[type="text"] {
-            flex-grow: 1;
+        .add-stock-form input[type="text"],
+        .add-stock-form input[type="number"] {
             padding: 0.75rem;
             border: 1px solid #333;
             background-color: #222;
             color: #e0e0e0;
             border-radius: 4px;
+        }
+        .add-stock-form input[type="text"] {
+            width: 200px;
+        }
+        .add-stock-form input[type="number"] {
+            width: 120px;
         }
         button {
             padding: 0.75rem 1.5rem;
@@ -59,6 +131,7 @@
             background-color: #0056b3;
         }
 
+        /* Portfolio Grid */
         .portfolio-grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(500px, 1fr));
@@ -87,10 +160,70 @@
             text-decoration: none;
             font-size: 0.9rem;
         }
+
+        /* Share Input Form */
+        .shares-form {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-bottom: 1rem;
+        }
+        .shares-form label {
+            color: #aaa;
+        }
+        .shares-input {
+            width: 100px;
+            padding: 0.5rem;
+            border: 1px solid #333;
+            background-color: #222;
+            color: #e0e0e0;
+            border-radius: 4px;
+        }
+        .update-btn {
+            padding: 0.5rem 1rem;
+            font-size: 0.85rem;
+        }
+
+        /* Position Summary */
+        .position-summary {
+            display: flex;
+            gap: 2rem;
+            margin-bottom: 1rem;
+            padding: 0.75rem;
+            background-color: #252525;
+            border-radius: 4px;
+        }
+        .position-summary .label {
+            color: #aaa;
+            margin-right: 0.5rem;
+        }
+        .position-summary .value {
+            color: #fff;
+            font-weight: bold;
+        }
+
+        /* Gains Table */
+        .gains-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 1rem;
+        }
+        .gains-table th, .gains-table td {
+            text-align: left;
+            padding: 0.5rem;
+            border-bottom: 1px solid #333;
+        }
+        .gains-table th {
+            color: #aaa;
+            font-weight: normal;
+            font-size: 0.85rem;
+        }
+
+        /* Metrics Table */
         .metrics-table {
             width: 100%;
             border-collapse: collapse;
-            margin-bottom: 1.5rem;
+            margin-bottom: 1rem;
         }
         .metrics-table th, .metrics-table td {
             text-align: left;
@@ -101,21 +234,16 @@
             color: #aaa;
             font-weight: normal;
         }
+
         .plot-container {
             flex-grow: 1;
             min-height: 300px;
         }
-        .nav-links {
+
+        .empty-message {
             text-align: center;
-            margin-bottom: 2rem;
-        }
-        .nav-links a {
-            color: #007bff;
-            text-decoration: none;
-            margin: 0 1rem;
-        }
-        .nav-links a:hover {
-            text-decoration: underline;
+            color: #aaa;
+            padding: 2rem;
         }
     </style>
 </head>
@@ -126,6 +254,8 @@
         <div class="nav-links">
             <a href="{{ url_for('portfolio') }}">My Portfolio</a>
             <a href="{{ url_for('research') }}">Research</a>
+            <a href="{{ url_for('momentum') }}">Momentum</a>
+            <a href="{{ url_for('crypto') }}">Crypto</a>
         </div>
 
         {% with messages = get_flashed_messages(with_categories=true) %}
@@ -138,11 +268,35 @@
             {% endif %}
         {% endwith %}
 
-        <form action="{{ url_for('add_stock') }}" method="post">
-            <input type="text" name="ticker" placeholder="Enter Ticker Symbol (e.g., AAPL)">
+        {% if summary %}
+        <div class="portfolio-summary">
+            <div class="summary-card total-value">
+                <div class="summary-label">Total Portfolio Value</div>
+                <div class="summary-value">${{ "{:,.2f}".format(summary.total_value) }}</div>
+            </div>
+            <div class="summary-card {{ 'positive' if summary.day_gain_dollars >= 0 else 'negative' }}">
+                <div class="summary-label">Day's Gain</div>
+                <div class="summary-value">
+                    {{ "+" if summary.day_gain_dollars >= 0 else "" }}${{ "{:,.2f}".format(summary.day_gain_dollars) }}
+                    <span class="summary-percent">({{ "+" if summary.day_gain_percent >= 0 else "" }}{{ "%.2f"|format(summary.day_gain_percent) }}%)</span>
+                </div>
+            </div>
+            <div class="summary-card {{ 'positive' if summary.ytd_gain_dollars >= 0 else 'negative' }}">
+                <div class="summary-label">YTD Gain</div>
+                <div class="summary-value">
+                    {{ "+" if summary.ytd_gain_dollars >= 0 else "" }}${{ "{:,.2f}".format(summary.ytd_gain_dollars) }}
+                    <span class="summary-percent">({{ "+" if summary.ytd_gain_percent >= 0 else "" }}{{ "%.2f"|format(summary.ytd_gain_percent) }}%)</span>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
+        <form action="{{ url_for('add_stock') }}" method="post" class="add-stock-form">
+            <input type="text" name="ticker" placeholder="Ticker (e.g., AAPL)">
+            <input type="number" name="shares" placeholder="Shares" step="0.01" min="0">
             <button type="submit">Add Stock</button>
         </form>
-        
+
         <div class="portfolio-grid">
             {% for stock in portfolio %}
                 <div class="stock-card">
@@ -150,17 +304,62 @@
                         <h2>{{ stock.ticker }}</h2>
                         <a href="{{ url_for('delete_stock', ticker=stock.ticker) }}" class="delete-btn">Remove</a>
                     </div>
-                    
+
+                    <form action="{{ url_for('update_shares') }}" method="post" class="shares-form">
+                        <input type="hidden" name="ticker" value="{{ stock.ticker }}">
+                        <label for="shares-{{ stock.ticker }}">Shares:</label>
+                        <input type="number" id="shares-{{ stock.ticker }}" name="shares"
+                               value="{{ stock.shares }}" step="0.01" min="0" class="shares-input">
+                        <button type="submit" class="update-btn">Update</button>
+                    </form>
+
+                    <div class="position-summary">
+                        <div>
+                            <span class="label">Position Value:</span>
+                            <span class="value">${{ "{:,.2f}".format(stock.current_value) if stock.current_value else '0.00' }}</span>
+                        </div>
+                        <div>
+                            <span class="label">Price:</span>
+                            <span class="value">${{ "%.2f"|format(stock.last_price) if stock.last_price is not none else 'N/A' }}</span>
+                        </div>
+                    </div>
+
+                    <table class="gains-table">
+                        <thead>
+                            <tr>
+                                <th>Period</th>
+                                <th>Gain ($)</th>
+                                <th>Gain (%)</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for period in ['1D', '1W', '1M', 'YTD'] %}
+                            {% set gain = stock.gains.get(period, {}) %}
+                            <tr>
+                                <td>{{ period }}</td>
+                                <td class="{{ 'positive' if gain.gain_dollars is not none and gain.gain_dollars >= 0 else 'negative' if gain.gain_dollars is not none else '' }}">
+                                    {% if gain.gain_dollars is not none %}
+                                        {{ "+" if gain.gain_dollars >= 0 else "" }}${{ "{:,.2f}".format(gain.gain_dollars) }}
+                                    {% else %}
+                                        N/A
+                                    {% endif %}
+                                </td>
+                                <td class="{{ 'positive' if gain.gain_percent is not none and gain.gain_percent >= 0 else 'negative' if gain.gain_percent is not none else '' }}">
+                                    {% if gain.gain_percent is not none %}
+                                        {{ "+" if gain.gain_percent >= 0 else "" }}{{ "%.2f"|format(gain.gain_percent) }}%
+                                    {% else %}
+                                        N/A
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+
                     <table class="metrics-table">
                         <tr>
-                            <th>Last Price</th>
-                            <td>${{ "%.2f"|format(stock.last_price) if stock.last_price is not none else 'N/A' }}</td>
                             <th>P/E Ratio</th>
                             <td>{{ "%.2f"|format(stock.pe_ratio) if stock.pe_ratio is not none else 'N/A' }}</td>
-                        </tr>
-                        <tr>
-                            <th>Market Cap</th>
-                            <td>${{ "{:,.0f}".format(stock.market_cap) if stock.market_cap is not none else 'N/A' }}</td>
                             <th>P/B Ratio</th>
                             <td>{{ "%.2f"|format(stock.pb_ratio) if stock.pb_ratio is not none else 'N/A' }}</td>
                         </tr>
@@ -171,9 +370,9 @@
                     </div>
                 </div>
             {% else %}
-                <p>Your portfolio is empty. Add a stock to get started.</p>
+                <p class="empty-message">Your portfolio is empty. Add a stock to get started.</p>
             {% endfor %}
         </div>
     </div>
 </body>
-</html> 
+</html>

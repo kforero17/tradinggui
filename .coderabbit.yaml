@@ -1,0 +1,24 @@
+language: en-US
+reviews:
+  profile: chill              # less nitpicky; use "assertive" for stricter reviews
+  high_level_summary: true
+  auto_review:
+    enabled: true
+    drafts: false             # avoid noise on draft PRs
+    ignore_usernames: ["dependabot[bot]"]
+  path_filters:
+    - "src/**"
+    - "!node_modules/**"
+    - "!**/dist/**"
+    - "!ios/Pods/**"
+    - "!android/**/build/**"
+  tools:                      # turn on stack-relevant linters/SAST
+    eslint: { enabled: true }
+    ruff: { enabled: true }
+    swiftlint: { enabled: true }
+    hadolint: { enabled: true }
+    gitleaks: { enabled: true }
+pre_merge_checks:
+  docstrings:
+    mode: warning
+    threshold: 70

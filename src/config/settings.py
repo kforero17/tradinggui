@@ -20,11 +20,20 @@ class Settings(BaseSettings):
     # API Settings
     HISTORICAL_LOOKBACK_DAYS: int = 400
     RECENT_DATA_AGE_LIMIT_DAYS: int = 1
-    YAHOO_FIN_RATE_LIMIT: int = 1 # seconds between requests
+
+    # Rate Limiting
+    MAX_CONCURRENT_WORKERS: int = 3
+    REQUESTS_PER_SECOND: float = 0.5  # 1 request per 2 seconds
     
     # Data Sources
     SP500_CSV_PATH: Path = RAW_DATA_DIR / "sp500.csv"
     NASDAQ_CSV_PATH: Path = RAW_DATA_DIR / "nasdaq.csv"
+
+    # Crypto Settings
+    CRYPTO_TABLE_NAME: str = "crypto_metrics"
+    CRYPTO_MA_PERIOD: int = 20
+    CRYPTO_DEFAULT_TIMEFRAME: str = "1h"
+    CRYPTO_DATA_AGE_LIMIT_MINUTES: int = 5
     
     # Logging
     LOG_LEVEL: str = "INFO"
@@ -42,6 +51,7 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = True
+        extra = "ignore"
 
 # Create global settings instance
 settings = Settings()

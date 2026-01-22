@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Crypto Trends</title>
+    <script src="https://cdn.plot.ly/plotly-2.26.0.min.js"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: #121212;
+            color: #e0e0e0;
+            margin: 0;
+            padding: 2rem;
+        }
+        .container {
+            max-width: 1400px;
+            margin: auto;
+        }
+        h1 {
+            color: #ffffff;
+            text-align: center;
+        }
+        .flashes {
+            list-style: none;
+            padding: 0;
+            margin-bottom: 1rem;
+        }
+        .flashes li {
+            padding: 1rem;
+            margin-bottom: 0.5rem;
+            border-radius: 4px;
+        }
+        .flashes .success { background-color: #28a745; color: white; }
+        .flashes .error { background-color: #dc3545; color: white; }
+        .flashes .warning { background-color: #ffc107; color: black; }
+
+        .nav-links {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+        .nav-links a {
+            color: #007bff;
+            text-decoration: none;
+            margin: 0 1rem;
+        }
+        .nav-links a:hover {
+            text-decoration: underline;
+        }
+
+        .filters-container {
+            background-color: #1e1e1e;
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+        }
+        .filters-row {
+            display: flex;
+            gap: 2rem;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .filter-group {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            min-width: 200px;
+        }
+        .filter-group label {
+            color: #aaa;
+            font-size: 0.9rem;
+        }
+        .slider-container {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+        input[type="range"] {
+            flex-grow: 1;
+            min-width: 150px;
+        }
+        .slider-value {
+            font-weight: bold;
+            color: #007bff;
+            min-width: 80px;
+        }
+        .filter-button {
+            padding: 0.75rem 1.5rem;
+            border: none;
+            background-color: #007bff;
+            color: white;
+            border-radius: 4px;
+            cursor: pointer;
+            align-self: end;
+        }
+        .filter-button:hover {
+            background-color: #0056b3;
+        }
+
+        .summary {
+            text-align: center;
+            margin-bottom: 1.5rem;
+            color: #aaa;
+        }
+
+        .crypto-table {
+            background-color: #1e1e1e;
+            border: 1px solid #333;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        th, td {
+            padding: 1rem;
+            text-align: left;
+            border-bottom: 1px solid #333;
+        }
+        th {
+            background-color: #2a2a2a;
+            color: #aaa;
+            font-weight: normal;
+            position: sticky;
+            top: 0;
+        }
+        tr:hover {
+            background-color: #252525;
+        }
+        .instrument-cell {
+            font-weight: bold;
+            color: #007bff;
+            cursor: pointer;
+        }
+        .instrument-cell:hover {
+            text-decoration: underline;
+        }
+        .positive {
+            color: #28a745;
+        }
+        .negative {
+            color: #dc3545;
+        }
+
+        /* Modal Styles */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.8);
+        }
+        .modal-content {
+            background-color: #1e1e1e;
+            margin: 5% auto;
+            padding: 2rem;
+            border-radius: 8px;
+            width: 90%;
+            max-width: 1000px;
+            max-height: 80%;
+            overflow-y: auto;
+            position: relative;
+        }
+        .close {
+            color: #aaa;
+            float: right;
+            font-size: 28px;
+            font-weight: bold;
+            cursor: pointer;
+            position: absolute;
+            right: 20px;
+            top: 15px;
+        }
+        .close:hover {
+            color: #fff;
+        }
+        .modal-title {
+            margin-top: 0;
+            color: #fff;
+        }
+        .loading {
+            text-align: center;
+            padding: 2rem;
+            color: #aaa;
+        }
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+        .metric-card {
+            background-color: #2a2a2a;
+            padding: 1rem;
+            border-radius: 6px;
+            border: 1px solid #333;
+        }
+        .metric-label {
+            color: #aaa;
+            font-size: 0.85rem;
+            margin-bottom: 0.25rem;
+        }
+        .metric-value {
+            color: #fff;
+            font-size: 1.25rem;
+            font-weight: bold;
+        }
+        .chart-container {
+            margin-top: 1.5rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Crypto Trends</h1>
+
+        <div class="nav-links">
+            <a href="{{ url_for('portfolio') }}">My Portfolio</a>
+            <a href="{{ url_for('research') }}">Research</a>
+            <a href="{{ url_for('momentum') }}">Momentum</a>
+            <a href="{{ url_for('crypto') }}">Crypto</a>
+        </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                <ul class="flashes">
+                {% for category, message in messages %}
+                    <li class="{{ category }}">{{ message }}</li>
+                {% endfor %}
+                </ul>
+            {% endif %}
+        {% endwith %}
+
+        <div class="filters-container">
+            <div class="filters-row">
+                <div class="filter-group">
+                    <label for="volumeSlider">Minimum 24h Volume (USD)</label>
+                    <div class="slider-container">
+                        <input type="range" id="volumeSlider" min="0" max="100" value="{{ (min_volume / 1e6) | round(0) }}" step="1">
+                        <span class="slider-value" id="volumeValue">${{ (min_volume / 1e6) | round(0) }}M</span>
+                    </div>
+                </div>
+
+                <button class="filter-button" onclick="applyFilters()">Apply Filters</button>
+            </div>
+        </div>
+
+        <div class="summary">
+            Showing {{ total_count }} crypto instruments{% if min_volume > 0 %} with 24h volume >= ${{ (min_volume / 1e6) | round(1) }}M{% endif %}
+        </div>
+
+        <div class="crypto-table">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Instrument</th>
+                        <th>Last Price</th>
+                        <th>24h Change</th>
+                        <th>% Above MA20</th>
+                        <th>% Above EMA20</th>
+                        <th>24h Volume</th>
+                        <th>24h High</th>
+                        <th>24h Low</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for crypto in instruments %}
+                        <tr>
+                            <td class="instrument-cell" onclick="showCryptoModal('{{ crypto.instrument }}')">{{ crypto.instrument }}</td>
+                            <td>${{ "%.2f"|format(crypto.last_price) if crypto.last_price is not none else 'N/A' }}</td>
+                            <td class="{{ 'positive' if crypto.price_change_24h and crypto.price_change_24h > 0 else 'negative' }}">
+                                {{ "%.2f"|format(crypto.price_change_24h) if crypto.price_change_24h is not none else 'N/A' }}%
+                            </td>
+                            <td class="{{ 'positive' if crypto.pct_above_ma_20 and crypto.pct_above_ma_20 > 0 else 'negative' }}">
+                                {{ "%.2f"|format(crypto.pct_above_ma_20) if crypto.pct_above_ma_20 is not none else 'N/A' }}%
+                            </td>
+                            <td class="{{ 'positive' if crypto.pct_above_ema_20 and crypto.pct_above_ema_20 > 0 else 'negative' }}">
+                                {{ "%.2f"|format(crypto.pct_above_ema_20) if crypto.pct_above_ema_20 is not none else 'N/A' }}%
+                            </td>
+                            <td>${{ "{:,.0f}".format(crypto.volume_24h) if crypto.volume_24h is not none else 'N/A' }}</td>
+                            <td>${{ "%.2f"|format(crypto.high_24h) if crypto.high_24h is not none else 'N/A' }}</td>
+                            <td>${{ "%.2f"|format(crypto.low_24h) if crypto.low_24h is not none else 'N/A' }}</td>
+                        </tr>
+                    {% else %}
+                        <tr>
+                            <td colspan="8" style="text-align: center; padding: 2rem; color: #aaa;">
+                                No crypto data available. Use the MCP tools to fetch data first.
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Modal for Crypto Details -->
+    <div id="cryptoModal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeModal()">&times;</span>
+            <h2 class="modal-title" id="modalTitle">Crypto Details</h2>
+            <div id="modalContent" class="loading">Loading...</div>
+        </div>
+    </div>
+
+    <script>
+        // Update slider values
+        document.getElementById('volumeSlider').addEventListener('input', function() {
+            document.getElementById('volumeValue').textContent = '$' + this.value + 'M';
+        });
+
+        // Apply filters
+        function applyFilters() {
+            const volume = document.getElementById('volumeSlider').value * 1e6;
+
+            const url = new URL(window.location);
+            url.searchParams.set('min_volume', volume);
+
+            window.location.href = url.toString();
+        }
+
+        // Show crypto modal
+        function showCryptoModal(instrument) {
+            const modal = document.getElementById('cryptoModal');
+            const modalTitle = document.getElementById('modalTitle');
+            const modalContent = document.getElementById('modalContent');
+
+            modalTitle.textContent = instrument + ' Details';
+            modalContent.innerHTML = '<div class="loading">Loading...</div>';
+            modal.style.display = 'block';
+
+            fetch('/get_crypto_plot/' + instrument)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    if (data.success) {
+                        let html = '';
+
+                        if (data.metrics) {
+                            html += '<div class="metrics-grid">';
+
+                            const formatValue = (value, suffix = '') => {
+                                if (value === null || value === undefined) return 'N/A';
+                                if (typeof value === 'number') {
+                                    return value.toFixed(2) + suffix;
+                                }
+                                return value + suffix;
+                            };
+
+                            const formatCurrency = (value) => {
+                                if (value === null || value === undefined) return 'N/A';
+                                return '$' + value.toFixed(2);
+                            };
+
+                            const formatVolume = (value) => {
+                                if (value === null || value === undefined) return 'N/A';
+                                return '$' + value.toLocaleString();
+                            };
+
+                            const colorClass = (value) => {
+                                if (value === null || value === undefined) return '';
+                                return value > 0 ? 'positive' : 'negative';
+                            };
+
+                            html += `
+                                <div class="metric-card">
+                                    <div class="metric-label">Last Price</div>
+                                    <div class="metric-value">${formatCurrency(data.metrics.last_price)}</div>
+                                </div>
+                                <div class="metric-card">
+                                    <div class="metric-label">24h Change</div>
+                                    <div class="metric-value ${colorClass(data.metrics.price_change_24h)}">${formatValue(data.metrics.price_change_24h, '%')}</div>
+                                </div>
+                                <div class="metric-card">
+                                    <div class="metric-label">% Above MA20</div>
+                                    <div class="metric-value ${colorClass(data.metrics.pct_above_ma_20)}">${formatValue(data.metrics.pct_above_ma_20, '%')}</div>
+                                </div>
+                                <div class="metric-card">
+                                    <div class="metric-label">% Above EMA20</div>
+                                    <div class="metric-value ${colorClass(data.metrics.pct_above_ema_20)}">${formatValue(data.metrics.pct_above_ema_20, '%')}</div>
+                                </div>
+                                <div class="metric-card">
+                                    <div class="metric-label">24h Volume</div>
+                                    <div class="metric-value">${formatVolume(data.metrics.volume_24h)}</div>
+                                </div>
+                                <div class="metric-card">
+                                    <div class="metric-label">24h High</div>
+                                    <div class="metric-value">${formatCurrency(data.metrics.high_24h)}</div>
+                                </div>
+                                <div class="metric-card">
+                                    <div class="metric-label">24h Low</div>
+                                    <div class="metric-value">${formatCurrency(data.metrics.low_24h)}</div>
+                                </div>
+                                <div class="metric-card">
+                                    <div class="metric-label">Timeframe</div>
+                                    <div class="metric-value">${data.metrics.timeframe || 'N/A'}</div>
+                                </div>
+                            `;
+                            html += '</div>';
+                        }
+
+                        html += '<div class="chart-container"><div id="cryptoChart"></div></div>';
+                        modalContent.innerHTML = html;
+
+                        if (data.plot_data) {
+                            const plotData = JSON.parse(data.plot_data);
+                            Plotly.newPlot('cryptoChart', plotData.data, plotData.layout, {displayModeBar: true, responsive: true});
+                        }
+                    } else {
+                        modalContent.innerHTML = '<p style="color: #dc3545;">Error: ' + (data.error || 'Unknown error') + '</p>';
+                    }
+                })
+                .catch(error => {
+                    modalContent.innerHTML = '<p style="color: #dc3545;">Error loading data: ' + error.message + '</p>';
+                });
+        }
+
+        // Close modal
+        function closeModal() {
+            document.getElementById('cryptoModal').style.display = 'none';
+        }
+
+        // Close modal when clicking outside
+        window.onclick = function(event) {
+            const modal = document.getElementById('cryptoModal');
+            if (event.target === modal) {
+                modal.style.display = 'none';
+            }
+        }
+    </script>
+</body>
+</html>
