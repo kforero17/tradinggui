@@ -28,6 +28,12 @@ class Settings(BaseSettings):
     # Data Sources
     SP500_CSV_PATH: Path = RAW_DATA_DIR / "sp500.csv"
     NASDAQ_CSV_PATH: Path = RAW_DATA_DIR / "nasdaq.csv"
+
+    # Crypto Settings
+    CRYPTO_TABLE_NAME: str = "crypto_metrics"
+    CRYPTO_MA_PERIOD: int = 20
+    CRYPTO_DEFAULT_TIMEFRAME: str = "1h"
+    CRYPTO_DATA_AGE_LIMIT_MINUTES: int = 5
     
     # Logging
     LOG_LEVEL: str = "INFO"

@@ -6,8 +6,10 @@ import plotly.graph_objects as go
 import plotly.io as pio
 
 from ..data.database import db
-from ..analysis.metrics import metrics_calculator
+from ..analysis.metrics import metrics_calculator, calculate_period_gains, calculate_portfolio_summary
+from ..analysis.crypto_metrics import crypto_metrics_calculator
 from ..config.security import security_config
+from ..config.settings import settings
 
 app = Flask(__name__)
 app.secret_key = security_config.get_secret_key()
@@ -113,22 +115,117 @@ def filter_momentum_stocks(min_market_cap: float = 2e9, min_momentum_pct: float 
         df = db.get_latest_metrics()
         if df.empty:
             return df
-        
+
         # Apply filters
         filtered_df = df[
-            (df['market_cap'].notna()) & 
+            (df['market_cap'].notna()) &
             (df['market_cap'] >= min_market_cap) &
-            (df['pct_above_ma_100'].notna()) & 
+            (df['pct_above_ma_100'].notna()) &
             (df['pct_above_ma_100'] >= min_momentum_pct)
         ].copy()
-        
+
         # Sort by momentum percentage (descending)
         filtered_df = filtered_df.sort_values('pct_above_ma_100', ascending=False)
-        
+
         return filtered_df
     except Exception as e:
         logger.error(f"Error filtering momentum stocks: {e}")
         return pd.DataFrame()
+
+
+def _build_crypto_figure(hist_data: pd.DataFrame, instrument: str) -> Optional[go.Figure]:
+    """Build a Plotly figure for crypto historical data."""
+    if hist_data is None or hist_data.empty:
+        logger.warning(f"No data provided for {instrument} crypto plot")
+        return None
+
+    if 'close' not in hist_data.columns:
+        logger.error(f"Missing 'close' column in crypto data for {instrument}")
+        return None
+
+    close_prices = hist_data['close'].dropna()
+    if close_prices.empty:
+        logger.error(f"No valid close prices for crypto {instrument}")
+        return None
+
+    timestamps = [d.strftime('%Y-%m-%d %H:%M') for d in close_prices.index]
+    prices = close_prices.values.tolist()
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Scatter(
+        x=timestamps,
+        y=prices,
+        mode='lines',
+        name='Close Price',
+        line=dict(color='#00D4AA', width=2)
+    ))
+
+    ma_period = settings.CRYPTO_MA_PERIOD
+    if len(close_prices) >= ma_period:
+        ma = close_prices.rolling(window=ma_period).mean().dropna()
+        ma_timestamps = [d.strftime('%Y-%m-%d %H:%M') for d in ma.index]
+        fig.add_trace(go.Scatter(
+            x=ma_timestamps,
+            y=ma.values.tolist(),
+            mode='lines',
+            name=f'{ma_period}-Period MA',
+            line=dict(color='#FF6B6B', width=1.5)
+        ))
+
+        ema = close_prices.ewm(span=ma_period, adjust=False).mean().dropna()
+        ema_timestamps = [d.strftime('%Y-%m-%d %H:%M') for d in ema.index]
+        fig.add_trace(go.Scatter(
+            x=ema_timestamps,
+            y=ema.values.tolist(),
+            mode='lines',
+            name=f'{ma_period}-Period EMA',
+            line=dict(color='#4ECDC4', width=1.5)
+        ))
+
+    fig.update_layout(
+        title=f'{instrument} Price Action',
+        xaxis_title='Time',
+        yaxis_title='Price (USD)',
+        legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01),
+        template='plotly_dark',
+        height=500,
+        margin=dict(t=50, b=50, l=50, r=50)
+    )
+
+    return fig
+
+
+def create_crypto_plot_json(hist_data: pd.DataFrame, instrument: str) -> Optional[str]:
+    """Generate Plotly figure data as JSON string for crypto charts."""
+    try:
+        fig = _build_crypto_figure(hist_data, instrument)
+        if fig is None:
+            return None
+
+        logger.info(f"Successfully created crypto plot JSON for {instrument}")
+        return fig.to_json()
+    except Exception as e:
+        logger.error(f"Error creating crypto plot JSON for {instrument}: {e}", exc_info=True)
+        return None
+
+
+def filter_crypto_instruments(min_volume: float = 0.0) -> pd.DataFrame:
+    """Filter crypto instruments based on volume criteria."""
+    try:
+        df = db.get_latest_crypto_metrics()
+        if df.empty:
+            return df
+
+        if min_volume > 0:
+            df = df[df['volume_24h'].notna() & (df['volume_24h'] >= min_volume)].copy()
+
+        df = df.sort_values('volume_24h', ascending=False)
+        return df
+    except Exception as e:
+        logger.error(f"Error filtering crypto instruments: {e}")
+        return pd.DataFrame()
+
 
 @app.route('/momentum')
 def momentum():
@@ -269,39 +366,59 @@ def research():
 
 @app.route('/')
 def portfolio():
-    """Main portfolio page."""
+    """Main portfolio page with value and gain calculations."""
     try:
-        tickers = db.get_portfolio_tickers()
-        
-        portfolio_metrics = []
-        if tickers:
-            all_metrics_df = db.get_latest_metrics()
-            
-            # Ensure all_metrics_df has a 'ticker' column to check against
-            if 'ticker' in all_metrics_df.columns:
-                portfolio_df = all_metrics_df[all_metrics_df['ticker'].isin(tickers)]
-                
-                for _, row in portfolio_df.iterrows():
-                    stock_data = row.to_dict()
-                    
-                    # Generate plot for each stock
-                    hist_data = metrics_calculator._get_historical_data(row['ticker'])
-                    stock_data['plot'] = create_stock_plot(hist_data, row['ticker'])
-                    
-                    portfolio_metrics.append(stock_data)
-            else:
-                 flash("Metrics table is empty or does not contain a 'ticker' column.", "warning")
+        positions = db.get_portfolio_with_shares()
 
-        return render_template('portfolio.html', portfolio=portfolio_metrics)
+        if not positions:
+            return render_template('portfolio.html', portfolio=[], summary=None)
+
+        tickers = [p['ticker'] for p in positions]
+        all_metrics_df = db.get_latest_metrics()
+
+        portfolio_metrics = []
+
+        if 'ticker' not in all_metrics_df.columns:
+            flash("Metrics table is empty or missing 'ticker' column.", "warning")
+            return render_template('portfolio.html', portfolio=[], summary=None)
+
+        for position in positions:
+            ticker = position['ticker']
+            shares = position['shares'] or 0.0
+
+            ticker_df = all_metrics_df[all_metrics_df['ticker'] == ticker]
+            if ticker_df.empty:
+                continue
+
+            stock_data = ticker_df.iloc[0].to_dict()
+
+            hist_data = metrics_calculator._get_historical_data(ticker)
+
+            gains = calculate_period_gains(hist_data, shares, position.get('added_at'))
+
+            current_price = stock_data.get('last_price', 0) or 0
+            current_value = current_price * shares
+
+            stock_data['plot'] = create_stock_plot(hist_data, ticker)
+            stock_data['shares'] = shares
+            stock_data['current_value'] = current_value
+            stock_data['gains'] = gains
+
+            portfolio_metrics.append(stock_data)
+
+        summary = calculate_portfolio_summary(portfolio_metrics)
+
+        return render_template('portfolio.html', portfolio=portfolio_metrics, summary=summary)
     except Exception as e:
         logger.error(f"Error loading portfolio page: {e}")
         flash(f"An error occurred: {e}", "error")
-        return render_template('portfolio.html', portfolio=[])
+        return render_template('portfolio.html', portfolio=[], summary=None)
 
 @app.route('/add_stock', methods=['POST'])
 def add_stock():
-    """Add a stock to the portfolio."""
+    """Add a stock to the portfolio with optional share quantity."""
     ticker = request.form.get('ticker', '').upper().strip()
+    shares_str = request.form.get('shares', '0')
     source_page = request.form.get('source_page', 'portfolio')
 
     if not ticker:
@@ -309,11 +426,11 @@ def add_stock():
         return redirect(url_for('portfolio'))
 
     try:
-        # Check if ticker is already in portfolio
+        shares = float(shares_str) if shares_str else 0.0
+
         if ticker in db.get_portfolio_tickers():
             flash(f"{ticker} is already in your portfolio.", "info")
         else:
-            # If not in portfolio, ensure we have data, then add
             if db.get_latest_metrics(ticker=ticker).empty:
                 logger.info(f"No data for {ticker} in DB. Fetching before adding to portfolio...")
                 metrics = metrics_calculator.get_metrics(ticker)
@@ -322,17 +439,44 @@ def add_stock():
                 else:
                     flash(f"Could not fetch data for {ticker}. Cannot add to portfolio.", "error")
                     return redirect(url_for('research' if source_page == 'research' else 'portfolio', ticker=ticker))
-            
+
             db.add_portfolio_ticker(ticker)
+            if shares > 0:
+                db.update_portfolio_shares(ticker, shares)
             flash(f"{ticker} has been added to your portfolio.", "success")
 
+    except ValueError:
+        flash("Invalid share quantity.", "error")
     except Exception as e:
         logger.error(f"Error adding stock {ticker}: {e}")
         flash(f"An error occurred while adding {ticker}.", "error")
-    
+
     if source_page == 'research':
         return redirect(url_for('research', ticker=ticker))
-    
+
+    return redirect(url_for('portfolio'))
+
+
+@app.route('/update_shares', methods=['POST'])
+def update_shares():
+    """Update share quantity for a portfolio position."""
+    ticker = request.form.get('ticker', '').upper().strip()
+    shares_str = request.form.get('shares', '0')
+
+    try:
+        shares = float(shares_str)
+        if shares < 0:
+            flash("Shares cannot be negative.", "warning")
+            return redirect(url_for('portfolio'))
+
+        db.update_portfolio_shares(ticker, shares)
+        flash(f"Updated {ticker} to {shares} shares.", "success")
+    except ValueError:
+        flash("Invalid share quantity.", "error")
+    except Exception as e:
+        logger.error(f"Error updating shares for {ticker}: {e}")
+        flash(f"Error updating shares: {e}", "error")
+
     return redirect(url_for('portfolio'))
 
 @app.route('/delete_stock/<ticker>')
@@ -344,5 +488,57 @@ def delete_stock(ticker: str):
     except Exception as e:
         logger.error(f"Error deleting stock {ticker}: {e}")
         flash(f"An error occurred while removing {ticker}.", "error")
-        
-    return redirect(url_for('portfolio')) 
+
+    return redirect(url_for('portfolio'))
+
+
+@app.route('/crypto')
+def crypto():
+    """Crypto trends page."""
+    try:
+        min_volume = float(request.args.get('min_volume', 0))
+        timeframe = request.args.get('timeframe', settings.CRYPTO_DEFAULT_TIMEFRAME)
+
+        crypto_data = filter_crypto_instruments(min_volume)
+
+        instruments_list = []
+        if not crypto_data.empty:
+            instruments_list = crypto_data.to_dict('records')
+
+        return render_template(
+            'crypto.html',
+            instruments=instruments_list,
+            min_volume=min_volume,
+            timeframe=timeframe,
+            total_count=len(instruments_list)
+        )
+    except Exception as e:
+        logger.error(f"Error loading crypto page: {e}")
+        flash(f"An error occurred: {e}", "error")
+        return render_template('crypto.html', instruments=[], min_volume=0, timeframe='1h', total_count=0)
+
+
+@app.route('/get_crypto_plot/<instrument>')
+def get_crypto_plot(instrument: str):
+    """API endpoint to get crypto plot for modal display."""
+    try:
+        logger.info(f"Fetching crypto plot for {instrument}")
+
+        metrics_df = db.get_latest_crypto_metrics(instrument=instrument)
+
+        metrics = None
+        if not metrics_df.empty:
+            metrics = metrics_df.iloc[0].to_dict()
+            logger.info(f"Found crypto metrics for {instrument}")
+        else:
+            logger.warning(f"No crypto metrics found for {instrument}")
+            return jsonify({'success': False, 'error': f'No data available for {instrument}'})
+
+        return jsonify({
+            'success': True,
+            'plot_data': None,
+            'metrics': metrics
+        })
+    except Exception as e:
+        logger.error(f"Error in get_crypto_plot for {instrument}: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': f'Unexpected error: {str(e)}'}) 

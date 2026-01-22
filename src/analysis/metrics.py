@@ -352,5 +352,144 @@ class StockMetricsCalculator:
             "ps_ratio": 10.0,
         }
 
+
+def calculate_period_gains(
+    hist_data: pd.DataFrame,
+    shares: float,
+    added_at: Optional[datetime] = None
+) -> Dict[str, Dict[str, Optional[float]]]:
+    """Calculate gains for multiple time periods from historical data.
+
+    Args:
+        hist_data: DataFrame with 'close' prices indexed by date
+        shares: Number of shares held
+        added_at: When the stock was added to portfolio (used for YTD if after Jan 1)
+
+    Returns:
+        Dictionary with period gains:
+        {'1D': {'gain_dollars': float, 'gain_percent': float}, ...}
+    """
+    empty_gain = {'gain_dollars': None, 'gain_percent': None}
+    empty_gains = {'1D': empty_gain.copy(), '1W': empty_gain.copy(),
+                   '1M': empty_gain.copy(), 'YTD': empty_gain.copy()}
+
+    if hist_data is None or hist_data.empty:
+        return empty_gains
+
+    close_prices = hist_data['close'].dropna()
+    if close_prices.empty:
+        return empty_gains
+
+    current_price = float(close_prices.iloc[-1])
+    current_date = close_prices.index[-1]
+
+    gains = {}
+
+    # 1D: today vs yesterday close
+    gains['1D'] = _calculate_gain_by_days(close_prices, current_price, shares, days_back=1)
+
+    # 1W: today vs ~7 calendar days ago (find closest trading day)
+    gains['1W'] = _calculate_gain_by_days(close_prices, current_price, shares, days_back=5)
+
+    # Handle timezone - match the index timezone if present
+    tz = close_prices.index.tz
+
+    # 1M: today vs first trading day of current month
+    first_of_month = pd.Timestamp(current_date.year, current_date.month, 1, tz=tz)
+    gains['1M'] = _calculate_gain_from_date(close_prices, current_price, shares, first_of_month)
+
+    # YTD: use added_at date if stock was added after Jan 1, otherwise use Jan 1
+    first_of_year = pd.Timestamp(current_date.year, 1, 1, tz=tz)
+    if added_at is not None:
+        added_ts = pd.Timestamp(added_at, tz=tz)
+        if added_ts > first_of_year:
+            first_of_year = added_ts
+    gains['YTD'] = _calculate_gain_from_date(close_prices, current_price, shares, first_of_year)
+
+    return gains
+
+
+def _calculate_gain_by_days(close_prices: pd.Series, current_price: float,
+                            shares: float, days_back: int) -> Dict[str, Optional[float]]:
+    """Calculate gain from N trading days back."""
+    if len(close_prices) <= days_back:
+        return {'gain_dollars': None, 'gain_percent': None}
+
+    reference_price = float(close_prices.iloc[-(days_back + 1)])
+    return _compute_gain_values(current_price, reference_price, shares)
+
+
+def _calculate_gain_from_date(close_prices: pd.Series, current_price: float,
+                              shares: float, reference_date: pd.Timestamp) -> Dict[str, Optional[float]]:
+    """Calculate gain from a specific reference date (finds closest trading day on or after)."""
+    available_dates = close_prices.index[close_prices.index >= reference_date]
+    if available_dates.empty:
+        return {'gain_dollars': None, 'gain_percent': None}
+
+    reference_price = float(close_prices.loc[available_dates[0]])
+    return _compute_gain_values(current_price, reference_price, shares)
+
+
+def _compute_gain_values(current_price: float, reference_price: float,
+                         shares: float) -> Dict[str, Optional[float]]:
+    """Compute dollar and percentage gains."""
+    if reference_price == 0:
+        return {'gain_dollars': None, 'gain_percent': None}
+
+    price_change = current_price - reference_price
+    gain_percent = (price_change / reference_price) * 100
+    gain_dollars = price_change * shares
+
+    return {
+        'gain_dollars': round(gain_dollars, 2),
+        'gain_percent': round(gain_percent, 2)
+    }
+
+
+def calculate_portfolio_summary(positions: List[Dict]) -> Dict[str, Any]:
+    """Calculate aggregate portfolio metrics.
+
+    Args:
+        positions: List of position dicts with 'current_value' and 'gains' keys
+
+    Returns:
+        Dictionary with total_value, day/ytd gain dollars and percentages
+    """
+    if not positions:
+        return {
+            'total_value': 0.0,
+            'day_gain_dollars': 0.0,
+            'day_gain_percent': 0.0,
+            'ytd_gain_dollars': 0.0,
+            'ytd_gain_percent': 0.0
+        }
+
+    total_value = sum(p.get('current_value', 0) or 0 for p in positions)
+
+    day_gain_dollars = sum(
+        p.get('gains', {}).get('1D', {}).get('gain_dollars', 0) or 0
+        for p in positions
+    )
+
+    ytd_gain_dollars = sum(
+        p.get('gains', {}).get('YTD', {}).get('gain_dollars', 0) or 0
+        for p in positions
+    )
+
+    yesterday_value = total_value - day_gain_dollars
+    ytd_start_value = total_value - ytd_gain_dollars
+
+    day_gain_percent = (day_gain_dollars / yesterday_value * 100) if yesterday_value > 0 else 0
+    ytd_gain_percent = (ytd_gain_dollars / ytd_start_value * 100) if ytd_start_value > 0 else 0
+
+    return {
+        'total_value': round(total_value, 2),
+        'day_gain_dollars': round(day_gain_dollars, 2),
+        'day_gain_percent': round(day_gain_percent, 2),
+        'ytd_gain_dollars': round(ytd_gain_dollars, 2),
+        'ytd_gain_percent': round(ytd_gain_percent, 2)
+    }
+
+
 # Create global metrics calculator instance
 metrics_calculator = StockMetricsCalculator(use_mock_data=False) 

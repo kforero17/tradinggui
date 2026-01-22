@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Momentum Stocks</title>
+    <title>Crypto Trends</title>
     <script src="https://cdn.plot.ly/plotly-2.26.0.min.js"></script>
     <style>
         body {
@@ -47,7 +47,7 @@
         .nav-links a:hover {
             text-decoration: underline;
         }
-        
+
         .filters-container {
             background-color: #1e1e1e;
             border: 1px solid #333;
@@ -97,14 +97,14 @@
         .filter-button:hover {
             background-color: #0056b3;
         }
-        
+
         .summary {
             text-align: center;
             margin-bottom: 1.5rem;
             color: #aaa;
         }
-        
-        .stocks-table {
+
+        .crypto-table {
             background-color: #1e1e1e;
             border: 1px solid #333;
             border-radius: 8px;
@@ -129,12 +129,12 @@
         tr:hover {
             background-color: #252525;
         }
-        .ticker-cell {
+        .instrument-cell {
             font-weight: bold;
             color: #007bff;
             cursor: pointer;
         }
-        .ticker-cell:hover {
+        .instrument-cell:hover {
             text-decoration: underline;
         }
         .positive {
@@ -143,7 +143,7 @@
         .negative {
             color: #dc3545;
         }
-        
+
         /* Modal Styles */
         .modal {
             display: none;
@@ -190,7 +190,7 @@
         }
         .metrics-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
             gap: 1rem;
             margin-bottom: 2rem;
         }
@@ -217,7 +217,7 @@
 </head>
 <body>
     <div class="container">
-        <h1>Momentum Stocks</h1>
+        <h1>Crypto Trends</h1>
 
         <div class="nav-links">
             <a href="{{ url_for('portfolio') }}">My Portfolio</a>
@@ -239,65 +239,57 @@
         <div class="filters-container">
             <div class="filters-row">
                 <div class="filter-group">
-                    <label for="marketCapSlider">Minimum Market Cap</label>
+                    <label for="volumeSlider">Minimum 24h Volume (USD)</label>
                     <div class="slider-container">
-                        <input type="range" id="marketCapSlider" min="1" max="50" value="{{ (min_market_cap / 1e9) | round(1) }}" step="0.5">
-                        <span class="slider-value" id="marketCapValue">${{ (min_market_cap / 1e9) | round(1) }}B</span>
+                        <input type="range" id="volumeSlider" min="0" max="100" value="{{ (min_volume / 1e6) | round(0) }}" step="1">
+                        <span class="slider-value" id="volumeValue">${{ (min_volume / 1e6) | round(0) }}M</span>
                     </div>
                 </div>
-                
-                <div class="filter-group">
-                    <label for="momentumSlider">Minimum % Above 100-Day MA</label>
-                    <div class="slider-container">
-                        <input type="range" id="momentumSlider" min="-20" max="50" value="{{ min_momentum_pct }}" step="1">
-                        <span class="slider-value" id="momentumValue">{{ min_momentum_pct }}%</span>
-                    </div>
-                </div>
-                
+
                 <button class="filter-button" onclick="applyFilters()">Apply Filters</button>
             </div>
         </div>
 
         <div class="summary">
-            Showing {{ total_count }} stocks with market cap ≥ ${{ (min_market_cap / 1e9) | round(1) }}B and momentum ≥ {{ min_momentum_pct }}%
+            Showing {{ total_count }} crypto instruments{% if min_volume > 0 %} with 24h volume >= ${{ (min_volume / 1e6) | round(1) }}M{% endif %}
         </div>
 
-        <div class="stocks-table">
+        <div class="crypto-table">
             <table>
                 <thead>
                     <tr>
-                        <th>Ticker</th>
+                        <th>Instrument</th>
                         <th>Last Price</th>
-                        <th>% Above MA100</th>
-                        <th>% Above EMA100</th>
-                        <th>Market Cap</th>
-                        <th>P/E Ratio</th>
-                        <th>P/B Ratio</th>
-                        <th>P/S Ratio</th>
-                        <th>EV/EBITDA</th>
+                        <th>24h Change</th>
+                        <th>% Above MA20</th>
+                        <th>% Above EMA20</th>
+                        <th>24h Volume</th>
+                        <th>24h High</th>
+                        <th>24h Low</th>
                     </tr>
                 </thead>
                 <tbody>
-                    {% for stock in stocks %}
+                    {% for crypto in instruments %}
                         <tr>
-                            <td class="ticker-cell" onclick="showStockPlot('{{ stock.ticker }}')">{{ stock.ticker }}</td>
-                            <td>${{ "%.2f"|format(stock.last_price) if stock.last_price is not none else 'N/A' }}</td>
-                            <td class="{{ 'positive' if stock.pct_above_ma_100 and stock.pct_above_ma_100 > 0 else 'negative' }}">
-                                {{ "%.2f"|format(stock.pct_above_ma_100) if stock.pct_above_ma_100 is not none else 'N/A' }}%
+                            <td class="instrument-cell" onclick="showCryptoModal('{{ crypto.instrument }}')">{{ crypto.instrument }}</td>
+                            <td>${{ "%.2f"|format(crypto.last_price) if crypto.last_price is not none else 'N/A' }}</td>
+                            <td class="{{ 'positive' if crypto.price_change_24h and crypto.price_change_24h > 0 else 'negative' }}">
+                                {{ "%.2f"|format(crypto.price_change_24h) if crypto.price_change_24h is not none else 'N/A' }}%
                             </td>
-                            <td class="{{ 'positive' if stock.pct_above_ema_100 and stock.pct_above_ema_100 > 0 else 'negative' }}">
-                                {{ "%.2f"|format(stock.pct_above_ema_100) if stock.pct_above_ema_100 is not none else 'N/A' }}%
+                            <td class="{{ 'positive' if crypto.pct_above_ma_20 and crypto.pct_above_ma_20 > 0 else 'negative' }}">
+                                {{ "%.2f"|format(crypto.pct_above_ma_20) if crypto.pct_above_ma_20 is not none else 'N/A' }}%
                             </td>
-                            <td>${{ "{:,.0f}".format(stock.market_cap / 1e9) if stock.market_cap is not none else 'N/A' }}B</td>
-                            <td>{{ "%.2f"|format(stock.pe_ratio) if stock.pe_ratio is not none else 'N/A' }}</td>
-                            <td>{{ "%.2f"|format(stock.pb_ratio) if stock.pb_ratio is not none else 'N/A' }}</td>
-                            <td>{{ "%.2f"|format(stock.ps_ratio) if stock.ps_ratio is not none else 'N/A' }}</td>
-                            <td>{{ "%.2f"|format(stock.ebitda_ev) if stock.ebitda_ev is not none else 'N/A' }}</td>
+                            <td class="{{ 'positive' if crypto.pct_above_ema_20 and crypto.pct_above_ema_20 > 0 else 'negative' }}">
+                                {{ "%.2f"|format(crypto.pct_above_ema_20) if crypto.pct_above_ema_20 is not none else 'N/A' }}%
+                            </td>
+                            <td>${{ "{:,.0f}".format(crypto.volume_24h) if crypto.volume_24h is not none else 'N/A' }}</td>
+                            <td>${{ "%.2f"|format(crypto.high_24h) if crypto.high_24h is not none else 'N/A' }}</td>
+                            <td>${{ "%.2f"|format(crypto.low_24h) if crypto.low_24h is not none else 'N/A' }}</td>
                         </tr>
                     {% else %}
                         <tr>
-                            <td colspan="9" style="text-align: center; padding: 2rem; color: #aaa;">
-                                No stocks found matching the current criteria.
+                            <td colspan="8" style="text-align: center; padding: 2rem; color: #aaa;">
+                                No crypto data available. Use the MCP tools to fetch data first.
                             </td>
                         </tr>
                     {% endfor %}
@@ -306,65 +298,53 @@
         </div>
     </div>
 
-    <!-- Modal for Stock Plot -->
-    <div id="stockModal" class="modal">
+    <!-- Modal for Crypto Details -->
+    <div id="cryptoModal" class="modal">
         <div class="modal-content">
             <span class="close" onclick="closeModal()">&times;</span>
-            <h2 class="modal-title" id="modalTitle">Stock Chart</h2>
-            <div id="modalContent" class="loading">Loading chart...</div>
+            <h2 class="modal-title" id="modalTitle">Crypto Details</h2>
+            <div id="modalContent" class="loading">Loading...</div>
         </div>
     </div>
 
     <script>
         // Update slider values
-        document.getElementById('marketCapSlider').addEventListener('input', function() {
-            document.getElementById('marketCapValue').textContent = '$' + this.value + 'B';
-        });
-
-        document.getElementById('momentumSlider').addEventListener('input', function() {
-            document.getElementById('momentumValue').textContent = this.value + '%';
+        document.getElementById('volumeSlider').addEventListener('input', function() {
+            document.getElementById('volumeValue').textContent = '$' + this.value + 'M';
         });
 
         // Apply filters
         function applyFilters() {
-            const marketCap = document.getElementById('marketCapSlider').value * 1e9;
-            const momentum = document.getElementById('momentumSlider').value;
-            
+            const volume = document.getElementById('volumeSlider').value * 1e6;
+
             const url = new URL(window.location);
-            url.searchParams.set('min_market_cap', marketCap);
-            url.searchParams.set('min_momentum_pct', momentum);
-            
+            url.searchParams.set('min_volume', volume);
+
             window.location.href = url.toString();
         }
 
-        // Show stock plot in modal
-        function showStockPlot(ticker) {
-            const modal = document.getElementById('stockModal');
+        // Show crypto modal
+        function showCryptoModal(instrument) {
+            const modal = document.getElementById('cryptoModal');
             const modalTitle = document.getElementById('modalTitle');
             const modalContent = document.getElementById('modalContent');
 
-            modalTitle.textContent = ticker + ' Chart';
-            modalContent.innerHTML = '<div class="loading">Loading chart...</div>';
+            modalTitle.textContent = instrument + ' Details';
+            modalContent.innerHTML = '<div class="loading">Loading...</div>';
             modal.style.display = 'block';
 
-            console.log('Fetching data for ticker:', ticker);
-
-            fetch('/get_stock_plot/' + ticker)
+            fetch('/get_crypto_plot/' + instrument)
                 .then(response => {
-                    console.log('Response status:', response.status);
                     if (!response.ok) {
                         throw new Error(`HTTP error! status: ${response.status}`);
                     }
                     return response.json();
                 })
                 .then(data => {
-                    console.log('Received data:', data);
-
                     if (data.success) {
                         let html = '';
 
                         if (data.metrics) {
-                            console.log('Rendering metrics');
                             html += '<div class="metrics-grid">';
 
                             const formatValue = (value, suffix = '') => {
@@ -380,9 +360,9 @@
                                 return '$' + value.toFixed(2);
                             };
 
-                            const formatMarketCap = (value) => {
+                            const formatVolume = (value) => {
                                 if (value === null || value === undefined) return 'N/A';
-                                return '$' + (value / 1e9).toFixed(2) + 'B';
+                                return '$' + value.toLocaleString();
                             };
 
                             const colorClass = (value) => {
@@ -396,70 +376,65 @@
                                     <div class="metric-value">${formatCurrency(data.metrics.last_price)}</div>
                                 </div>
                                 <div class="metric-card">
-                                    <div class="metric-label">% Above MA100</div>
-                                    <div class="metric-value ${colorClass(data.metrics.pct_above_ma_100)}">${formatValue(data.metrics.pct_above_ma_100, '%')}</div>
+                                    <div class="metric-label">24h Change</div>
+                                    <div class="metric-value ${colorClass(data.metrics.price_change_24h)}">${formatValue(data.metrics.price_change_24h, '%')}</div>
                                 </div>
                                 <div class="metric-card">
-                                    <div class="metric-label">% Above EMA100</div>
-                                    <div class="metric-value ${colorClass(data.metrics.pct_above_ema_100)}">${formatValue(data.metrics.pct_above_ema_100, '%')}</div>
+                                    <div class="metric-label">% Above MA20</div>
+                                    <div class="metric-value ${colorClass(data.metrics.pct_above_ma_20)}">${formatValue(data.metrics.pct_above_ma_20, '%')}</div>
                                 </div>
                                 <div class="metric-card">
-                                    <div class="metric-label">Market Cap</div>
-                                    <div class="metric-value">${formatMarketCap(data.metrics.market_cap)}</div>
+                                    <div class="metric-label">% Above EMA20</div>
+                                    <div class="metric-value ${colorClass(data.metrics.pct_above_ema_20)}">${formatValue(data.metrics.pct_above_ema_20, '%')}</div>
                                 </div>
                                 <div class="metric-card">
-                                    <div class="metric-label">P/E Ratio</div>
-                                    <div class="metric-value">${formatValue(data.metrics.pe_ratio)}</div>
+                                    <div class="metric-label">24h Volume</div>
+                                    <div class="metric-value">${formatVolume(data.metrics.volume_24h)}</div>
                                 </div>
                                 <div class="metric-card">
-                                    <div class="metric-label">P/B Ratio</div>
-                                    <div class="metric-value">${formatValue(data.metrics.pb_ratio)}</div>
+                                    <div class="metric-label">24h High</div>
+                                    <div class="metric-value">${formatCurrency(data.metrics.high_24h)}</div>
                                 </div>
                                 <div class="metric-card">
-                                    <div class="metric-label">P/S Ratio</div>
-                                    <div class="metric-value">${formatValue(data.metrics.ps_ratio)}</div>
+                                    <div class="metric-label">24h Low</div>
+                                    <div class="metric-value">${formatCurrency(data.metrics.low_24h)}</div>
                                 </div>
                                 <div class="metric-card">
-                                    <div class="metric-label">EV/EBITDA</div>
-                                    <div class="metric-value">${formatValue(data.metrics.ebitda_ev)}</div>
+                                    <div class="metric-label">Timeframe</div>
+                                    <div class="metric-value">${data.metrics.timeframe || 'N/A'}</div>
                                 </div>
                             `;
                             html += '</div>';
                         }
 
-                            html += '<div class="chart-container"><div id="stockChart"></div></div>';
-
-                        console.log('Setting modal content');
+                        html += '<div class="chart-container"><div id="cryptoChart"></div></div>';
                         modalContent.innerHTML = html;
 
                         if (data.plot_data) {
-                            console.log('Rendering plot with Plotly.newPlot');
                             const plotData = JSON.parse(data.plot_data);
-                            Plotly.newPlot('stockChart', plotData.data, plotData.layout, {displayModeBar: true, responsive: true});
+                            Plotly.newPlot('cryptoChart', plotData.data, plotData.layout, {displayModeBar: true, responsive: true});
                         }
                     } else {
-                        console.error('Error from server:', data.error);
                         modalContent.innerHTML = '<p style="color: #dc3545;">Error: ' + (data.error || 'Unknown error') + '</p>';
                     }
                 })
                 .catch(error => {
-                    console.error('Fetch error:', error);
-                    modalContent.innerHTML = '<p style="color: #dc3545;">Error loading chart: ' + error.message + '</p>';
+                    modalContent.innerHTML = '<p style="color: #dc3545;">Error loading data: ' + error.message + '</p>';
                 });
         }
 
         // Close modal
         function closeModal() {
-            document.getElementById('stockModal').style.display = 'none';
+            document.getElementById('cryptoModal').style.display = 'none';
         }
 
         // Close modal when clicking outside
         window.onclick = function(event) {
-            const modal = document.getElementById('stockModal');
+            const modal = document.getElementById('cryptoModal');
             if (event.target === modal) {
                 modal.style.display = 'none';
             }
         }
     </script>
 </body>
-</html> 
+</html>
