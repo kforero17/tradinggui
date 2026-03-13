@@ -1,465 +1,145 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Momentum Stocks</title>
-    <script src="https://cdn.plot.ly/plotly-2.26.0.min.js"></script>
-    <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-            background-color: #121212;
-            color: #e0e0e0;
-            margin: 0;
-            padding: 2rem;
-        }
-        .container {
-            max-width: 1400px;
-            margin: auto;
-        }
-        h1 {
-            color: #ffffff;
-            text-align: center;
-        }
-        .flashes {
-            list-style: none;
-            padding: 0;
-            margin-bottom: 1rem;
-        }
-        .flashes li {
-            padding: 1rem;
-            margin-bottom: 0.5rem;
-            border-radius: 4px;
-        }
-        .flashes .success { background-color: #28a745; color: white; }
-        .flashes .error { background-color: #dc3545; color: white; }
-        .flashes .warning { background-color: #ffc107; color: black; }
+{% extends "base.html" %}
+{% block title %}Momentum Stocks{% endblock %}
 
-        .nav-links {
-            text-align: center;
-            margin-bottom: 2rem;
-        }
-        .nav-links a {
-            color: #007bff;
-            text-decoration: none;
-            margin: 0 1rem;
-        }
-        .nav-links a:hover {
-            text-decoration: underline;
-        }
-        
-        .filters-container {
-            background-color: #1e1e1e;
-            border: 1px solid #333;
-            border-radius: 8px;
-            padding: 1.5rem;
-            margin-bottom: 2rem;
-        }
-        .filters-row {
-            display: flex;
-            gap: 2rem;
-            align-items: center;
-            flex-wrap: wrap;
-        }
-        .filter-group {
-            display: flex;
-            flex-direction: column;
-            gap: 0.5rem;
-            min-width: 200px;
-        }
-        .filter-group label {
-            color: #aaa;
-            font-size: 0.9rem;
-        }
-        .slider-container {
-            display: flex;
-            align-items: center;
-            gap: 1rem;
-        }
-        input[type="range"] {
-            flex-grow: 1;
-            min-width: 150px;
-        }
-        .slider-value {
-            font-weight: bold;
-            color: #007bff;
-            min-width: 80px;
-        }
-        .filter-button {
-            padding: 0.75rem 1.5rem;
-            border: none;
-            background-color: #007bff;
-            color: white;
-            border-radius: 4px;
-            cursor: pointer;
-            align-self: end;
-        }
-        .filter-button:hover {
-            background-color: #0056b3;
-        }
-        
-        .summary {
-            text-align: center;
-            margin-bottom: 1.5rem;
-            color: #aaa;
-        }
-        
-        .stocks-table {
-            background-color: #1e1e1e;
-            border: 1px solid #333;
-            border-radius: 8px;
-            overflow: hidden;
-        }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-        }
-        th, td {
-            padding: 1rem;
-            text-align: left;
-            border-bottom: 1px solid #333;
-        }
-        th {
-            background-color: #2a2a2a;
-            color: #aaa;
-            font-weight: normal;
-            position: sticky;
-            top: 0;
-        }
-        tr:hover {
-            background-color: #252525;
-        }
-        .ticker-cell {
-            font-weight: bold;
-            color: #007bff;
-            cursor: pointer;
-        }
-        .ticker-cell:hover {
-            text-decoration: underline;
-        }
-        .positive {
-            color: #28a745;
-        }
-        .negative {
-            color: #dc3545;
-        }
-        
-        /* Modal Styles */
-        .modal {
-            display: none;
-            position: fixed;
-            z-index: 1000;
-            left: 0;
-            top: 0;
-            width: 100%;
-            height: 100%;
-            background-color: rgba(0, 0, 0, 0.8);
-        }
-        .modal-content {
-            background-color: #1e1e1e;
-            margin: 5% auto;
-            padding: 2rem;
-            border-radius: 8px;
-            width: 90%;
-            max-width: 1000px;
-            max-height: 80%;
-            overflow-y: auto;
-            position: relative;
-        }
-        .close {
-            color: #aaa;
-            float: right;
-            font-size: 28px;
-            font-weight: bold;
-            cursor: pointer;
-            position: absolute;
-            right: 20px;
-            top: 15px;
-        }
-        .close:hover {
-            color: #fff;
-        }
-        .modal-title {
-            margin-top: 0;
-            color: #fff;
-        }
-        .loading {
-            text-align: center;
-            padding: 2rem;
-            color: #aaa;
-        }
-        .metrics-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 1rem;
-            margin-bottom: 2rem;
-        }
-        .metric-card {
-            background-color: #2a2a2a;
-            padding: 1rem;
-            border-radius: 6px;
-            border: 1px solid #333;
-        }
-        .metric-label {
-            color: #aaa;
-            font-size: 0.85rem;
-            margin-bottom: 0.25rem;
-        }
-        .metric-value {
-            color: #fff;
-            font-size: 1.25rem;
-            font-weight: bold;
-        }
-        .chart-container {
-            margin-top: 1.5rem;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>Momentum Stocks</h1>
+{% block head_extra %}
+<script src="https://cdn.plot.ly/plotly-2.26.0.min.js"></script>
+{% endblock %}
 
-        <div class="nav-links">
-            <a href="{{ url_for('portfolio') }}">My Portfolio</a>
-            <a href="{{ url_for('research') }}">Research</a>
-            <a href="{{ url_for('momentum') }}">Momentum</a>
-            <a href="{{ url_for('crypto') }}">Crypto</a>
-        </div>
+{% block content %}
+<div class="page-header"><h1>Momentum Stocks</h1></div>
 
-        {% with messages = get_flashed_messages(with_categories=true) %}
-            {% if messages %}
-                <ul class="flashes">
-                {% for category, message in messages %}
-                    <li class="{{ category }}">{{ message }}</li>
-                {% endfor %}
-                </ul>
-            {% endif %}
-        {% endwith %}
-
-        <div class="filters-container">
-            <div class="filters-row">
-                <div class="filter-group">
-                    <label for="marketCapSlider">Minimum Market Cap</label>
-                    <div class="slider-container">
-                        <input type="range" id="marketCapSlider" min="1" max="50" value="{{ (min_market_cap / 1e9) | round(1) }}" step="0.5">
-                        <span class="slider-value" id="marketCapValue">${{ (min_market_cap / 1e9) | round(1) }}B</span>
-                    </div>
-                </div>
-                
-                <div class="filter-group">
-                    <label for="momentumSlider">Minimum % Above 100-Day MA</label>
-                    <div class="slider-container">
-                        <input type="range" id="momentumSlider" min="-20" max="50" value="{{ min_momentum_pct }}" step="1">
-                        <span class="slider-value" id="momentumValue">{{ min_momentum_pct }}%</span>
-                    </div>
-                </div>
-                
-                <button class="filter-button" onclick="applyFilters()">Apply Filters</button>
+<div class="filters-container">
+    <div class="filters-row">
+        <div class="filter-group">
+            <label for="marketCapSlider">Minimum Market Cap</label>
+            <div class="slider-container">
+                <input type="range" id="marketCapSlider" min="1" max="50" value="{{ (min_market_cap / 1e9) | round(1) }}" step="0.5">
+                <span class="slider-value" id="marketCapValue">${{ (min_market_cap / 1e9) | round(1) }}B</span>
             </div>
         </div>
-
-        <div class="summary">
-            Showing {{ total_count }} stocks with market cap ≥ ${{ (min_market_cap / 1e9) | round(1) }}B and momentum ≥ {{ min_momentum_pct }}%
+        <div class="filter-group">
+            <label for="momentumSlider">Minimum % Above 100-Day MA</label>
+            <div class="slider-container">
+                <input type="range" id="momentumSlider" min="-20" max="50" value="{{ min_momentum_pct }}" step="1">
+                <span class="slider-value" id="momentumValue">{{ min_momentum_pct }}%</span>
+            </div>
         </div>
-
-        <div class="stocks-table">
-            <table>
-                <thead>
-                    <tr>
-                        <th>Ticker</th>
-                        <th>Last Price</th>
-                        <th>% Above MA100</th>
-                        <th>% Above EMA100</th>
-                        <th>Market Cap</th>
-                        <th>P/E Ratio</th>
-                        <th>P/B Ratio</th>
-                        <th>P/S Ratio</th>
-                        <th>EV/EBITDA</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for stock in stocks %}
-                        <tr>
-                            <td class="ticker-cell" onclick="showStockPlot('{{ stock.ticker }}')">{{ stock.ticker }}</td>
-                            <td>${{ "%.2f"|format(stock.last_price) if stock.last_price is not none else 'N/A' }}</td>
-                            <td class="{{ 'positive' if stock.pct_above_ma_100 and stock.pct_above_ma_100 > 0 else 'negative' }}">
-                                {{ "%.2f"|format(stock.pct_above_ma_100) if stock.pct_above_ma_100 is not none else 'N/A' }}%
-                            </td>
-                            <td class="{{ 'positive' if stock.pct_above_ema_100 and stock.pct_above_ema_100 > 0 else 'negative' }}">
-                                {{ "%.2f"|format(stock.pct_above_ema_100) if stock.pct_above_ema_100 is not none else 'N/A' }}%
-                            </td>
-                            <td>${{ "{:,.0f}".format(stock.market_cap / 1e9) if stock.market_cap is not none else 'N/A' }}B</td>
-                            <td>{{ "%.2f"|format(stock.pe_ratio) if stock.pe_ratio is not none else 'N/A' }}</td>
-                            <td>{{ "%.2f"|format(stock.pb_ratio) if stock.pb_ratio is not none else 'N/A' }}</td>
-                            <td>{{ "%.2f"|format(stock.ps_ratio) if stock.ps_ratio is not none else 'N/A' }}</td>
-                            <td>{{ "%.2f"|format(stock.ebitda_ev) if stock.ebitda_ev is not none else 'N/A' }}</td>
-                        </tr>
-                    {% else %}
-                        <tr>
-                            <td colspan="9" style="text-align: center; padding: 2rem; color: #aaa;">
-                                No stocks found matching the current criteria.
-                            </td>
-                        </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
+        <button onclick="applyFilters()">Apply Filters</button>
     </div>
+</div>
 
-    <!-- Modal for Stock Plot -->
-    <div id="stockModal" class="modal">
-        <div class="modal-content">
-            <span class="close" onclick="closeModal()">&times;</span>
-            <h2 class="modal-title" id="modalTitle">Stock Chart</h2>
-            <div id="modalContent" class="loading">Loading chart...</div>
-        </div>
+<div class="text-center text-muted" style="margin-bottom: 1.5rem;">
+    Showing {{ total_count }} stocks with market cap &ge; ${{ (min_market_cap / 1e9) | round(1) }}B and momentum &ge; {{ min_momentum_pct }}%
+</div>
+
+<div class="data-table">
+    <table>
+        <thead>
+            <tr>
+                <th>Ticker</th>
+                <th>Last Price</th>
+                <th>% Above MA100</th>
+                <th>% Above EMA100</th>
+                <th>RSI (14)</th>
+                <th>Market Cap</th>
+                <th>P/E Ratio</th>
+                <th>P/B Ratio</th>
+                <th>P/S Ratio</th>
+                <th>EV/EBITDA</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for stock in stocks %}
+                <tr>
+                    <td class="ticker-cell" onclick="showStockPlot('{{ stock.ticker }}')">{{ stock.ticker }}</td>
+                    <td>${{ "%.2f"|format(stock.last_price) if stock.last_price is not none else 'N/A' }}</td>
+                    <td class="{{ 'positive' if stock.pct_above_ma_100 and stock.pct_above_ma_100 > 0 else 'negative' }}">
+                        {{ "%.2f"|format(stock.pct_above_ma_100) if stock.pct_above_ma_100 is not none else 'N/A' }}%
+                    </td>
+                    <td class="{{ 'positive' if stock.pct_above_ema_100 and stock.pct_above_ema_100 > 0 else 'negative' }}">
+                        {{ "%.2f"|format(stock.pct_above_ema_100) if stock.pct_above_ema_100 is not none else 'N/A' }}%
+                    </td>
+                    <td class="{{ 'negative' if stock.rsi_14 is not none and stock.rsi_14 >= 70 else 'positive' if stock.rsi_14 is not none and stock.rsi_14 <= 30 else '' }}">
+                        {{ "%.1f"|format(stock.rsi_14) if stock.rsi_14 is not none else 'N/A' }}
+                    </td>
+                    <td>${{ "{:,.0f}".format(stock.market_cap / 1e9) if stock.market_cap is not none else 'N/A' }}B</td>
+                    <td>{{ "%.2f"|format(stock.pe_ratio) if stock.pe_ratio is not none else 'N/A' }}</td>
+                    <td>{{ "%.2f"|format(stock.pb_ratio) if stock.pb_ratio is not none else 'N/A' }}</td>
+                    <td>{{ "%.2f"|format(stock.ps_ratio) if stock.ps_ratio is not none else 'N/A' }}</td>
+                    <td>{{ "%.2f"|format(stock.ebitda_ev) if stock.ebitda_ev is not none else 'N/A' }}</td>
+                </tr>
+            {% else %}
+                <tr><td colspan="10" class="text-center text-muted" style="padding: 2rem;">No stocks found matching the current criteria.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<!-- Modal for Stock Plot -->
+<div id="stockModal" class="modal">
+    <div class="modal-content">
+        <span class="close" onclick="closeModal('stockModal')">&times;</span>
+        <h2 class="modal-title" id="modalTitle">Stock Chart</h2>
+        <div id="modalContent" class="loading">Loading chart...</div>
     </div>
+</div>
+{% endblock %}
 
-    <script>
-        // Update slider values
-        document.getElementById('marketCapSlider').addEventListener('input', function() {
-            document.getElementById('marketCapValue').textContent = '$' + this.value + 'B';
-        });
+{% block scripts %}
+<script>
+    document.getElementById('marketCapSlider').addEventListener('input', function() {
+        document.getElementById('marketCapValue').textContent = '$' + this.value + 'B';
+    });
+    document.getElementById('momentumSlider').addEventListener('input', function() {
+        document.getElementById('momentumValue').textContent = this.value + '%';
+    });
 
-        document.getElementById('momentumSlider').addEventListener('input', function() {
-            document.getElementById('momentumValue').textContent = this.value + '%';
-        });
+    function applyFilters() {
+        var marketCap = document.getElementById('marketCapSlider').value * 1e9;
+        var momentum = document.getElementById('momentumSlider').value;
+        var url = new URL(window.location);
+        url.searchParams.set('min_market_cap', marketCap);
+        url.searchParams.set('min_momentum_pct', momentum);
+        window.location.href = url.toString();
+    }
 
-        // Apply filters
-        function applyFilters() {
-            const marketCap = document.getElementById('marketCapSlider').value * 1e9;
-            const momentum = document.getElementById('momentumSlider').value;
-            
-            const url = new URL(window.location);
-            url.searchParams.set('min_market_cap', marketCap);
-            url.searchParams.set('min_momentum_pct', momentum);
-            
-            window.location.href = url.toString();
-        }
+    function showStockPlot(ticker) {
+        var modal = document.getElementById('stockModal');
+        document.getElementById('modalTitle').textContent = ticker + ' Chart';
+        showLoading('modalContent');
+        openModal('stockModal');
 
-        // Show stock plot in modal
-        function showStockPlot(ticker) {
-            const modal = document.getElementById('stockModal');
-            const modalTitle = document.getElementById('modalTitle');
-            const modalContent = document.getElementById('modalContent');
+        fetch('/get_stock_plot/' + ticker)
+            .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+            .then(function(data) {
+                if (!data.success) { document.getElementById('modalContent').innerHTML = '<p class="negative">Error: ' + (data.error || 'Unknown') + '</p>'; return; }
 
-            modalTitle.textContent = ticker + ' Chart';
-            modalContent.innerHTML = '<div class="loading">Loading chart...</div>';
-            modal.style.display = 'block';
+                var html = '';
+                if (data.metrics) {
+                    html += '<div class="metrics-grid">';
+                    html += buildMetricCard('Last Price', formatCurrency(data.metrics.last_price));
+                    html += buildMetricCard('% Above MA100', formatValue(data.metrics.pct_above_ma_100, '%'), colorClass(data.metrics.pct_above_ma_100));
+                    html += buildMetricCard('% Above EMA100', formatValue(data.metrics.pct_above_ema_100, '%'), colorClass(data.metrics.pct_above_ema_100));
+                    html += buildMetricCard('RSI (14)', formatValue(data.metrics.rsi_14), rsiColorClass(data.metrics.rsi_14));
+                    html += buildMetricCard('MACD', formatValue(data.metrics.macd), colorClass(data.metrics.macd_histogram));
+                    html += buildMetricCard('Market Cap', formatMarketCap(data.metrics.market_cap));
+                    html += buildMetricCard('P/E Ratio', formatValue(data.metrics.pe_ratio));
+                    html += buildMetricCard('P/B Ratio', formatValue(data.metrics.pb_ratio));
+                    html += buildMetricCard('P/S Ratio', formatValue(data.metrics.ps_ratio));
+                    html += buildMetricCard('EV/EBITDA', formatValue(data.metrics.ebitda_ev));
+                    html += '</div>';
+                }
+                html += '<div class="chart-container"><div id="stockChart"></div></div>';
+                document.getElementById('modalContent').innerHTML = html;
 
-            console.log('Fetching data for ticker:', ticker);
-
-            fetch('/get_stock_plot/' + ticker)
-                .then(response => {
-                    console.log('Response status:', response.status);
-                    if (!response.ok) {
-                        throw new Error(`HTTP error! status: ${response.status}`);
-                    }
-                    return response.json();
-                })
-                .then(data => {
-                    console.log('Received data:', data);
-
-                    if (data.success) {
-                        let html = '';
-
-                        if (data.metrics) {
-                            console.log('Rendering metrics');
-                            html += '<div class="metrics-grid">';
-
-                            const formatValue = (value, suffix = '') => {
-                                if (value === null || value === undefined) return 'N/A';
-                                if (typeof value === 'number') {
-                                    return value.toFixed(2) + suffix;
-                                }
-                                return value + suffix;
-                            };
-
-                            const formatCurrency = (value) => {
-                                if (value === null || value === undefined) return 'N/A';
-                                return '$' + value.toFixed(2);
-                            };
-
-                            const formatMarketCap = (value) => {
-                                if (value === null || value === undefined) return 'N/A';
-                                return '$' + (value / 1e9).toFixed(2) + 'B';
-                            };
-
-                            const colorClass = (value) => {
-                                if (value === null || value === undefined) return '';
-                                return value > 0 ? 'positive' : 'negative';
-                            };
-
-                            html += `
-                                <div class="metric-card">
-                                    <div class="metric-label">Last Price</div>
-                                    <div class="metric-value">${formatCurrency(data.metrics.last_price)}</div>
-                                </div>
-                                <div class="metric-card">
-                                    <div class="metric-label">% Above MA100</div>
-                                    <div class="metric-value ${colorClass(data.metrics.pct_above_ma_100)}">${formatValue(data.metrics.pct_above_ma_100, '%')}</div>
-                                </div>
-                                <div class="metric-card">
-                                    <div class="metric-label">% Above EMA100</div>
-                                    <div class="metric-value ${colorClass(data.metrics.pct_above_ema_100)}">${formatValue(data.metrics.pct_above_ema_100, '%')}</div>
-                                </div>
-                                <div class="metric-card">
-                                    <div class="metric-label">Market Cap</div>
-                                    <div class="metric-value">${formatMarketCap(data.metrics.market_cap)}</div>
-                                </div>
-                                <div class="metric-card">
-                                    <div class="metric-label">P/E Ratio</div>
-                                    <div class="metric-value">${formatValue(data.metrics.pe_ratio)}</div>
-                                </div>
-                                <div class="metric-card">
-                                    <div class="metric-label">P/B Ratio</div>
-                                    <div class="metric-value">${formatValue(data.metrics.pb_ratio)}</div>
-                                </div>
-                                <div class="metric-card">
-                                    <div class="metric-label">P/S Ratio</div>
-                                    <div class="metric-value">${formatValue(data.metrics.ps_ratio)}</div>
-                                </div>
-                                <div class="metric-card">
-                                    <div class="metric-label">EV/EBITDA</div>
-                                    <div class="metric-value">${formatValue(data.metrics.ebitda_ev)}</div>
-                                </div>
-                            `;
-                            html += '</div>';
-                        }
-
-                            html += '<div class="chart-container"><div id="stockChart"></div></div>';
-
-                        console.log('Setting modal content');
-                        modalContent.innerHTML = html;
-
-                        if (data.plot_data) {
-                            console.log('Rendering plot with Plotly.newPlot');
-                            const plotData = JSON.parse(data.plot_data);
-                            Plotly.newPlot('stockChart', plotData.data, plotData.layout, {displayModeBar: true, responsive: true});
-                        }
-                    } else {
-                        console.error('Error from server:', data.error);
-                        modalContent.innerHTML = '<p style="color: #dc3545;">Error: ' + (data.error || 'Unknown error') + '</p>';
-                    }
-                })
-                .catch(error => {
-                    console.error('Fetch error:', error);
-                    modalContent.innerHTML = '<p style="color: #dc3545;">Error loading chart: ' + error.message + '</p>';
-                });
-        }
-
-        // Close modal
-        function closeModal() {
-            document.getElementById('stockModal').style.display = 'none';
-        }
-
-        // Close modal when clicking outside
-        window.onclick = function(event) {
-            const modal = document.getElementById('stockModal');
-            if (event.target === modal) {
-                modal.style.display = 'none';
-            }
-        }
-    </script>
-</body>
-</html> 
+                if (data.plot_data) {
+                    var plotData = JSON.parse(data.plot_data);
+                    Plotly.newPlot('stockChart', plotData.data, plotData.layout, {displayModeBar: true, responsive: true});
+                }
+            })
+            .catch(function(err) {
+                document.getElementById('modalContent').innerHTML = '<p class="negative">Error loading chart: ' + err.message + '</p>';
+            });
+    }
+</script>
+{% endblock %}

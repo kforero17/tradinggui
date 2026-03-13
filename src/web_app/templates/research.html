@@ -1,205 +1,532 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Stock Research</title>
-    <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-            background-color: #121212;
-            color: #e0e0e0;
-            margin: 0;
-            padding: 2rem;
-        }
-        .container {
-            max-width: 1200px;
-            margin: auto;
-        }
-        h1 {
-            color: #ffffff;
-            text-align: center;
-        }
-        .flashes {
-            list-style: none;
-            padding: 0;
-            margin-bottom: 1rem;
-        }
-        .flashes li {
-            padding: 1rem;
-            margin-bottom: 0.5rem;
-            border-radius: 4px;
-        }
-        .flashes .success { background-color: #28a745; color: white; }
-        .flashes .error { background-color: #dc3545; color: white; }
-        .flashes .warning { background-color: #ffc107; color: black; }
+{% extends "base.html" %}
+{% block title %}Stock Research{% endblock %}
 
-        form {
-            display: flex;
-            gap: 1rem;
-            margin-bottom: 2rem;
-            max-width: 800px;
-            margin-left: auto;
-            margin-right: auto;
-        }
-        input[type="text"] {
-            flex-grow: 1;
-            padding: 0.75rem;
-            border: 1px solid #333;
-            background-color: #222;
-            color: #e0e0e0;
-            border-radius: 4px;
-        }
-        button {
-            padding: 0.75rem 1.5rem;
-            border: none;
-            background-color: #007bff;
-            color: white;
-            border-radius: 4px;
-            cursor: pointer;
-        }
-        button:hover {
-            background-color: #0056b3;
-        }
-        .stock-card {
-            background-color: #1e1e1e;
-            border: 1px solid #333;
-            border-radius: 8px;
-            padding: 1.5rem;
-            max-width: 800px;
-            margin-left: auto;
-            margin-right: auto;
-        }
-        .stock-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 1.5rem;
-        }
-        .stock-header h2 {
-            margin: 0;
-            font-size: 2rem;
-        }
-        .add-portfolio-form {
-            margin-bottom: 0;
-            gap: 0;
-        }
-        .add-btn {
-            padding: 0.5rem 1rem;
-            background-color: #28a745;
-        }
-        .add-btn:hover {
-            background-color: #218838;
-        }
-        .in-portfolio-badge {
-            font-size: 0.9rem;
-            font-weight: bold;
-            padding: 0.5rem 1rem;
-            border-radius: 4px;
-            background-color: #17a2b8;
-            color: white;
-        }
-        .metrics-table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-bottom: 1.5rem;
-        }
-        .metrics-table th, .metrics-table td {
-            text-align: left;
-            padding: 0.75rem;
-            border-bottom: 1px solid #333;
-            width: 25%;
-        }
-        .metrics-table th {
-            color: #aaa;
-            font-weight: normal;
-        }
-        .plot-container {
-            min-height: 400px;
-        }
-        .nav-links {
-            text-align: center;
-            margin-bottom: 2rem;
-        }
-        .nav-links a {
-            color: #007bff;
-            text-decoration: none;
-            margin: 0 1rem;
-        }
-        .nav-links a:hover {
-            text-decoration: underline;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>Stock Research</h1>
+{% block head_extra %}
+<style>
+    .search-form { display: flex; gap: 1rem; margin-bottom: 2rem; max-width: 800px; margin-left: auto; margin-right: auto; }
+    .search-form input[type="text"] { flex-grow: 1; }
+    .stock-card { background-color: var(--bg-card); border: 1px solid var(--border-color); border-radius: 8px; padding: 1.5rem; max-width: 800px; margin-left: auto; margin-right: auto; }
+    .stock-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; }
+    .stock-header h2 { margin: 0; font-size: 2rem; }
+    .add-portfolio-form { margin-bottom: 0; gap: 0; }
+    .in-portfolio-badge { font-size: 0.9rem; font-weight: bold; padding: 0.5rem 1rem; border-radius: 4px; background-color: var(--color-info); color: white; }
+    .metrics-table { width: 100%; border-collapse: collapse; margin-bottom: 1.5rem; }
+    .metrics-table th, .metrics-table td { text-align: left; padding: 0.75rem; border-bottom: 1px solid var(--border-color); width: 25%; }
+    .metrics-table th { color: var(--text-muted); font-weight: normal; }
+    .plot-container { min-height: 400px; }
 
-        <div class="nav-links">
-            <a href="{{ url_for('portfolio') }}">My Portfolio</a>
-            <a href="{{ url_for('research') }}">Research</a>
-            <a href="{{ url_for('momentum') }}">Momentum</a>
-            <a href="{{ url_for('crypto') }}">Crypto</a>
+    /* Research Note Layout */
+    .research-note { max-width: 1000px; margin: 2.5rem auto 0 auto; display: flex; flex-direction: column; gap: 1.5rem; }
+
+    /* Summary Rating Box */
+    .rating-box { background-color: var(--bg-card); border: 1px solid var(--border-color); border-radius: 8px; padding: 1.5rem; display: grid; grid-template-columns: auto 1fr auto; gap: 2rem; align-items: center; }
+    .rating-box--buy { border-left: 4px solid var(--color-positive); }
+    .rating-box--hold { border-left: 4px solid var(--color-warning); }
+    .rating-box--sell { border-left: 4px solid var(--color-negative); }
+    .rating-badge { display: inline-block; font-size: 1.5rem; font-weight: 700; letter-spacing: 0.1em; padding: 0.5rem 1.25rem; border-radius: 6px; text-transform: uppercase; white-space: nowrap; }
+    .rating-badge--buy { background-color: rgba(40, 167, 69, 0.15); color: var(--color-positive); border: 1px solid var(--color-positive); }
+    .rating-badge--hold { background-color: rgba(255, 193, 7, 0.15); color: var(--color-warning); border: 1px solid var(--color-warning); }
+    .rating-badge--sell { background-color: rgba(220, 53, 69, 0.15); color: var(--color-negative); border: 1px solid var(--color-negative); }
+    .rating-center { text-align: center; }
+    .rating-center .price-target-label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted); margin-bottom: 0.4rem; }
+    .price-target-range { display: flex; align-items: center; justify-content: center; gap: 0.75rem; margin-bottom: 0.5rem; }
+    .price-target-range .pt-bound { font-size: 0.85rem; color: var(--text-muted); }
+    .price-target-range .pt-mean { font-size: 1.6rem; font-weight: 700; color: var(--text-heading); }
+    .price-target-range .pt-sep { color: var(--border-color); }
+    .upside-row { display: flex; align-items: center; justify-content: center; gap: 1rem; font-size: 0.85rem; color: var(--text-muted); }
+    .upside-pct { font-weight: 600; }
+    .upside-pct--positive { color: var(--color-positive); }
+    .upside-pct--negative { color: var(--color-negative); }
+    .rating-meta { font-size: 0.75rem; color: var(--text-muted); margin-top: 0.3rem; text-align: center; }
+    .rating-quality { display: flex; flex-direction: column; gap: 0.6rem; }
+    .rq-item { display: flex; flex-direction: column; align-items: flex-end; }
+    .rq-label { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.07em; color: var(--text-muted); }
+    .rq-value { font-size: 1rem; font-weight: 600; color: var(--text-primary); }
+
+    /* Section Wrapper */
+    .rn-section { background-color: var(--bg-card); border: 1px solid var(--border-color); border-radius: 8px; padding: 1.5rem; }
+    .rn-section-title { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--text-muted); font-weight: 600; border-bottom: 1px solid var(--border-color); padding-bottom: 0.6rem; margin-bottom: 1.25rem; margin-top: 0; }
+
+    /* Business Overview */
+    .biz-meta { display: flex; flex-wrap: wrap; gap: 0.4rem 1.5rem; font-size: 0.82rem; color: var(--text-muted); margin-bottom: 1rem; }
+    .biz-meta span { display: flex; align-items: center; gap: 0.3rem; }
+    .biz-meta a { color: var(--accent-blue); text-decoration: none; }
+    .biz-meta a:hover { text-decoration: underline; }
+    .biz-company-name { font-size: 1.2rem; font-weight: 700; color: var(--text-heading); margin: 0 0 0.5rem 0; }
+    .biz-summary-wrapper { position: relative; }
+    .biz-summary-input { display: none; }
+    .biz-summary-text { font-size: 0.88rem; line-height: 1.65; color: var(--text-primary); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+    .biz-summary-input:checked ~ .biz-summary-text { display: block; -webkit-line-clamp: unset; overflow: visible; }
+    .biz-summary-toggle { display: inline-block; margin-top: 0.4rem; font-size: 0.8rem; color: var(--accent-blue); cursor: pointer; user-select: none; }
+    .biz-summary-input:checked ~ .biz-summary-toggle::before { content: "Show less"; }
+    .biz-summary-toggle::before { content: "Show more"; }
+
+    /* Data Tables (margins, revenue, fcf) */
+    .rn-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+    .rn-table th, .rn-table td { padding: 0.6rem 0.75rem; border-bottom: 1px solid var(--border-color); text-align: right; }
+    .rn-table th:first-child, .rn-table td:first-child { text-align: left; color: var(--text-muted); font-weight: normal; }
+    .rn-table thead th { color: var(--text-muted); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.06em; background-color: var(--bg-header); }
+    .rn-table thead th:first-child { border-radius: 4px 0 0 0; }
+    .rn-table thead th:last-child { border-radius: 0 4px 0 0; }
+    .rn-table tbody tr:last-child td { border-bottom: none; }
+    .rn-table tbody tr:hover td { background-color: var(--bg-card-hover); }
+    .margin-high { color: var(--color-positive); font-weight: 500; }
+    .margin-mid { color: var(--text-primary); }
+    .margin-low { color: var(--color-negative); font-weight: 500; }
+    .growth-positive { color: var(--color-positive); font-size: 0.78rem; }
+    .growth-negative { color: var(--color-negative); font-size: 0.78rem; }
+    .cagr-chip { display: inline-block; background-color: rgba(0, 212, 170, 0.12); border: 1px solid var(--accent-green); color: var(--accent-green); border-radius: 4px; padding: 0.2rem 0.6rem; font-size: 0.78rem; font-weight: 600; margin-left: 1rem; vertical-align: middle; }
+
+    /* Metric Card Grids */
+    .metric-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 1rem; }
+    .metric-card { background-color: var(--bg-header); border: 1px solid var(--border-color); border-radius: 6px; padding: 0.9rem 1rem; }
+    .metric-card .mc-label { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted); margin-bottom: 0.3rem; }
+    .metric-card .mc-value { font-size: 1.15rem; font-weight: 700; color: var(--text-primary); }
+    .metric-card .mc-sub { font-size: 0.75rem; color: var(--text-muted); margin-top: 0.2rem; }
+    .mc-value--positive { color: var(--color-positive); }
+    .mc-value--negative { color: var(--color-negative); }
+    .mc-value--warning { color: var(--color-warning); }
+    .mc-value--neutral { color: var(--text-primary); }
+
+    /* FCF Section */
+    .fcf-header-row { display: flex; align-items: center; margin-bottom: 1rem; gap: 1.5rem; flex-wrap: wrap; }
+    .fcf-pill { background-color: var(--bg-header); border: 1px solid var(--border-color); border-radius: 4px; padding: 0.35rem 0.85rem; font-size: 0.82rem; color: var(--text-muted); }
+    .fcf-pill strong { color: var(--text-primary); }
+
+    /* Valuation Grid */
+    .valuation-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 0.85rem; }
+    .val-card { background-color: var(--bg-header); border: 1px solid var(--border-color); border-radius: 6px; padding: 0.85rem 1rem; display: flex; flex-direction: column; }
+    .val-card .vc-label { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted); margin-bottom: 0.25rem; }
+    .val-card .vc-value { font-size: 1.1rem; font-weight: 700; color: var(--text-primary); }
+
+    /* Ownership / Management */
+    .ownership-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+    .ownership-row { display: flex; flex-direction: column; gap: 0.75rem; }
+    .own-item { display: flex; justify-content: space-between; align-items: center; padding: 0.55rem 0; border-bottom: 1px solid var(--border-color); font-size: 0.85rem; }
+    .own-item:last-child { border-bottom: none; }
+    .own-label { color: var(--text-muted); }
+    .own-value { font-weight: 600; color: var(--text-primary); }
+    .own-bar-wrap { width: 100%; background-color: var(--bg-header); border-radius: 99px; height: 4px; margin-top: 0.2rem; }
+    .own-bar { height: 4px; border-radius: 99px; background-color: var(--accent-blue); }
+
+    @media (max-width: 700px) {
+        .rating-box { grid-template-columns: 1fr; }
+        .rating-quality { flex-direction: row; flex-wrap: wrap; justify-content: flex-start; }
+        .rq-item { align-items: flex-start; }
+        .ownership-grid { grid-template-columns: 1fr; }
+    }
+</style>
+{% endblock %}
+
+{% macro fmt_number(value) %}{% if value is none %}N/A{% elif value < 0 %}{% set abs_val = value * -1 %}{% if abs_val >= 1e12 %}-${{ "%.2f"|format(abs_val / 1e12) }}T{% elif abs_val >= 1e9 %}-${{ "%.2f"|format(abs_val / 1e9) }}B{% elif abs_val >= 1e6 %}-${{ "%.2f"|format(abs_val / 1e6) }}M{% elif abs_val >= 1e3 %}-${{ "%.1f"|format(abs_val / 1e3) }}K{% else %}-${{ "%.2f"|format(abs_val) }}{% endif %}{% elif value >= 1e12 %}${{ "%.2f"|format(value / 1e12) }}T{% elif value >= 1e9 %}${{ "%.2f"|format(value / 1e9) }}B{% elif value >= 1e6 %}${{ "%.2f"|format(value / 1e6) }}M{% elif value >= 1e3 %}${{ "%.1f"|format(value / 1e3) }}K{% else %}${{ "%.2f"|format(value) }}{% endif %}{% endmacro %}
+
+{% block content %}
+<div class="page-header"><h1>Stock Research</h1></div>
+
+<form action="{{ url_for('research') }}" method="post" class="search-form">
+    <input type="text" name="ticker" placeholder="Enter Ticker Symbol (e.g., AAPL, SPY)" value="{{ ticker if ticker }}">
+    <button type="submit">Research</button>
+</form>
+
+{% if stock_data %}
+    <div class="stock-card">
+        <div class="stock-header">
+            <h2>{{ stock_data.ticker }}</h2>
+            {% if stock_data.ticker in portfolio_tickers %}
+                <span class="in-portfolio-badge">In Portfolio</span>
+            {% else %}
+                <form action="{{ url_for('add_stock') }}" method="post" class="add-portfolio-form">
+                    <input type="hidden" name="ticker" value="{{ stock_data.ticker }}">
+                    <input type="hidden" name="source_page" value="research">
+                    <button type="submit" class="btn-success">Add to Portfolio</button>
+                </form>
+            {% endif %}
         </div>
 
-        {% with messages = get_flashed_messages(with_categories=true) %}
-            {% if messages %}
-                <ul class="flashes">
-                {% for category, message in messages %}
-                    <li class="{{ category }}">{{ message }}</li>
-                {% endfor %}
-                </ul>
+        <table class="metrics-table">
+            <tr>
+                <th>Last Price</th>
+                <td>${{ "%.2f"|format(stock_data.last_price) if stock_data.last_price is not none else 'N/A' }}</td>
+                <th>P/E Ratio</th>
+                <td>{{ "%.2f"|format(stock_data.pe_ratio) if stock_data.pe_ratio is not none else 'N/A' }}</td>
+            </tr>
+            <tr>
+                <th>Market Cap</th>
+                <td>${{ "{:,.0f}".format(stock_data.market_cap) if stock_data.market_cap is not none else 'N/A' }}</td>
+                <th>P/B Ratio</th>
+                <td>{{ "%.2f"|format(stock_data.pb_ratio) if stock_data.pb_ratio is not none else 'N/A' }}</td>
+            </tr>
+            <tr>
+                <th>P/S Ratio</th>
+                <td>{{ "%.2f"|format(stock_data.ps_ratio) if stock_data.ps_ratio is not none else 'N/A' }}</td>
+                <th>EV/EBITDA</th>
+                <td>{{ "%.2f"|format(stock_data.ebitda_ev) if stock_data.ebitda_ev is not none else 'N/A' }}</td>
+            </tr>
+            {% if stock_data.sector %}
+            <tr>
+                <th>Sector</th>
+                <td>{{ stock_data.sector }}</td>
+                <th>Industry</th>
+                <td>{{ stock_data.industry or 'N/A' }}</td>
+            </tr>
             {% endif %}
-        {% endwith %}
+            {% if stock_data.rsi_14 is not none %}
+            <tr>
+                <th>RSI (14)</th>
+                <td class="{{ 'negative' if stock_data.rsi_14 >= 70 else 'positive' if stock_data.rsi_14 <= 30 else '' }}">{{ "%.1f"|format(stock_data.rsi_14) }}</td>
+                <th>MACD</th>
+                <td class="{{ 'positive' if stock_data.macd_histogram is not none and stock_data.macd_histogram > 0 else 'negative' if stock_data.macd_histogram is not none else '' }}">
+                    {{ "%.4f"|format(stock_data.macd) if stock_data.macd is not none else 'N/A' }}
+                </td>
+            </tr>
+            {% endif %}
+        </table>
 
-        <form action="{{ url_for('research') }}" method="post">
-            <input type="text" name="ticker" placeholder="Enter Ticker Symbol (e.g., AAPL, SPY)" value="{{ ticker if ticker }}">
-            <button type="submit">Research</button>
-        </form>
-        
-        {% if stock_data %}
-            <div class="stock-card">
-                <div class="stock-header">
-                    <h2>{{ stock_data.ticker }}</h2>
-                    {% if stock_data.ticker in portfolio_tickers %}
-                        <span class="in-portfolio-badge">In Portfolio</span>
-                    {% else %}
-                        <form action="{{ url_for('add_stock') }}" method="post" class="add-portfolio-form">
-                            <input type="hidden" name="ticker" value="{{ stock_data.ticker }}">
-                            <input type="hidden" name="source_page" value="research">
-                            <button type="submit" class="add-btn">Add to Portfolio</button>
-                        </form>
-                    {% endif %}
-                </div>
-                
-                <table class="metrics-table">
-                    <tr>
-                        <th>Last Price</th>
-                        <td>${{ "%.2f"|format(stock_data.last_price) if stock_data.last_price is not none else 'N/A' }}</td>
-                        <th>P/E Ratio</th>
-                        <td>{{ "%.2f"|format(stock_data.pe_ratio) if stock_data.pe_ratio is not none else 'N/A' }}</td>
-                    </tr>
-                    <tr>
-                        <th>Market Cap</th>
-                        <td>${{ "{:,.0f}".format(stock_data.market_cap) if stock_data.market_cap is not none else 'N/A' }}</td>
-                        <th>P/B Ratio</th>
-                        <td>{{ "%.2f"|format(stock_data.pb_ratio) if stock_data.pb_ratio is not none else 'N/A' }}</td>
-                    </tr>
-                    <tr>
-                        <th>P/S Ratio</th>
-                        <td>{{ "%.2f"|format(stock_data.ps_ratio) if stock_data.ps_ratio is not none else 'N/A' }}</td>
-                        <th>EV/EBITDA</th>
-                        <td>{{ "%.2f"|format(stock_data.ebitda_ev) if stock_data.ebitda_ev is not none else 'N/A' }}</td>
-                    </tr>
-                </table>
+        <div class="plot-container">
+            {{ stock_data.plot|safe if stock_data.plot else '<p>No plot data available.</p>' }}
+        </div>
+    </div>
+{% elif request.method == 'POST' %}
+    <p class="text-center text-muted">No data found for the specified ticker.</p>
+{% endif %}
 
-                <div class="plot-container">
-                    {{ stock_data.plot|safe if stock_data.plot else '<p>No plot data available.</p>' }}
-                </div>
+{% if deep_research %}
+{% set dr = deep_research %}
+{% set rec = dr.analyst.recommendation | lower if dr.analyst.recommendation else '' %}
+{% if rec in ['buy', 'strong_buy', 'strongbuy'] %}
+    {% set rating_cls = 'buy' %}
+    {% set rating_label = 'BUY' if rec == 'buy' else 'STRONG BUY' %}
+{% elif rec in ['sell', 'underperform', 'underweight'] %}
+    {% set rating_cls = 'sell' %}
+    {% set rating_label = 'SELL' %}
+{% else %}
+    {% set rating_cls = 'hold' %}
+    {% set rating_label = 'HOLD' %}
+{% endif %}
+
+<div class="research-note">
+
+    <div class="rating-box rating-box--{{ rating_cls }}">
+        <div>
+            <div style="font-size:0.68rem;text-transform:uppercase;letter-spacing:0.1em;color:var(--text-muted);margin-bottom:0.5rem;">Analyst Consensus</div>
+            <span class="rating-badge rating-badge--{{ rating_cls }}">{{ rating_label }}</span>
+            {% if dr.analyst.num_analysts is not none %}
+            <div class="rating-meta">Based on {{ dr.analyst.num_analysts }} analyst{{ 's' if dr.analyst.num_analysts != 1 else '' }}</div>
+            {% endif %}
+        </div>
+
+        <div class="rating-center">
+            <div class="price-target-label">12-Month Price Target</div>
+            <div class="price-target-range">
+                {% if dr.analyst.target_low is not none %}<span class="pt-bound">${{ "%.2f"|format(dr.analyst.target_low) }}</span><span class="pt-sep">/</span>{% endif %}
+                <span class="pt-mean">{{ "$%.2f"|format(dr.analyst.target_mean) if dr.analyst.target_mean is not none else 'N/A' }}</span>
+                {% if dr.analyst.target_high is not none %}<span class="pt-sep">/</span><span class="pt-bound">${{ "%.2f"|format(dr.analyst.target_high) }}</span>{% endif %}
             </div>
-        {% elif request.method == 'POST' %}
-            <p style="text-align: center;">No data found for the specified ticker.</p>
+            <div class="upside-row">
+                {% if dr.analyst.current_price is not none %}
+                <span>Current: ${{ "%.2f"|format(dr.analyst.current_price) }}</span>
+                {% endif %}
+                {% if dr.analyst.upside_pct is not none %}
+                <span class="upside-pct {{ 'upside-pct--positive' if dr.analyst.upside_pct >= 0 else 'upside-pct--negative' }}">
+                    {{ '+' if dr.analyst.upside_pct >= 0 else '' }}{{ "%.1f"|format(dr.analyst.upside_pct) }}% upside
+                </span>
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="rating-quality">
+            <div class="rq-item">
+                <span class="rq-label">ROE</span>
+                <span class="rq-value">{{ "%.1f"|format(dr.quality.roe) ~ '%' if dr.quality.roe is not none else 'N/A' }}</span>
+            </div>
+            <div class="rq-item">
+                <span class="rq-label">ROIC</span>
+                <span class="rq-value">{{ "%.1f"|format(dr.quality.roic) ~ '%' if dr.quality.roic is not none else 'N/A' }}</span>
+            </div>
+            <div class="rq-item">
+                <span class="rq-label">Rev. CAGR</span>
+                <span class="rq-value">{{ "%.1f"|format(dr.quality.revenue_cagr) ~ '%' if dr.quality.revenue_cagr is not none else 'N/A' }}</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="rn-section">
+        <h3 class="rn-section-title">Business Overview</h3>
+        <div class="biz-company-name">{{ dr.company_name }}</div>
+        <div class="biz-meta">
+            {% if dr.sector %}<span>{{ dr.sector }}</span>{% endif %}
+            {% if dr.industry %}<span>{{ dr.industry }}</span>{% endif %}
+            {% if dr.employee_count is not none %}<span>{{ "{:,}".format(dr.employee_count) }} employees</span>{% endif %}
+            {% if dr.website %}<span><a href="{{ dr.website }}" target="_blank" rel="noopener">{{ dr.website }}</a></span>{% endif %}
+        </div>
+        {% if dr.business_summary %}
+        <div class="biz-summary-wrapper">
+            <input type="checkbox" class="biz-summary-input" id="biz-expand-{{ dr.ticker }}">
+            <div class="biz-summary-text">{{ dr.business_summary }}</div>
+            <label class="biz-summary-toggle" for="biz-expand-{{ dr.ticker }}"></label>
+        </div>
         {% endif %}
     </div>
-</body>
-</html> 
+
+    {% if dr.margin_history and dr.margin_history | length > 0 %}
+    <div class="rn-section">
+        <h3 class="rn-section-title">Profitability Analysis</h3>
+        <table class="rn-table">
+            <thead>
+                <tr>
+                    <th>Metric</th>
+                    {% for row in dr.margin_history %}<th>{{ row.year }}</th>{% endfor %}
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>Gross Margin</td>
+                    {% for row in dr.margin_history %}
+                    <td class="{{ 'margin-high' if row.gross_margin is not none and row.gross_margin > 20 else 'margin-low' if row.gross_margin is not none and row.gross_margin < 10 else 'margin-mid' }}">
+                        {{ "%.1f"|format(row.gross_margin) ~ '%' if row.gross_margin is not none else 'N/A' }}
+                    </td>
+                    {% endfor %}
+                </tr>
+                <tr>
+                    <td>Operating Margin</td>
+                    {% for row in dr.margin_history %}
+                    <td class="{{ 'margin-high' if row.operating_margin is not none and row.operating_margin > 20 else 'margin-low' if row.operating_margin is not none and row.operating_margin < 10 else 'margin-mid' }}">
+                        {{ "%.1f"|format(row.operating_margin) ~ '%' if row.operating_margin is not none else 'N/A' }}
+                    </td>
+                    {% endfor %}
+                </tr>
+                <tr>
+                    <td>Net Margin</td>
+                    {% for row in dr.margin_history %}
+                    <td class="{{ 'margin-high' if row.net_margin is not none and row.net_margin > 20 else 'margin-low' if row.net_margin is not none and row.net_margin < 10 else 'margin-mid' }}">
+                        {{ "%.1f"|format(row.net_margin) ~ '%' if row.net_margin is not none else 'N/A' }}
+                    </td>
+                    {% endfor %}
+                </tr>
+            </tbody>
+        </table>
+        {% if dr.quality.gross_margin_avg is not none %}
+        <div style="margin-top:0.85rem;font-size:0.8rem;color:var(--text-muted);">
+            Avg. Gross Margin: <strong style="color:var(--text-primary);">{{ "%.1f"|format(dr.quality.gross_margin_avg) }}%</strong>
+            {% if dr.quality.gross_margin_trend %}
+            &nbsp;&mdash;&nbsp;Trend:
+            <strong style="color:{{ 'var(--color-positive)' if dr.quality.gross_margin_trend == 'improving' else 'var(--color-negative)' if dr.quality.gross_margin_trend == 'declining' else 'var(--text-primary)' }};">
+                {{ dr.quality.gross_margin_trend | capitalize }}
+            </strong>
+            {% endif %}
+        </div>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    {% if dr.revenue_history and dr.revenue_history | length > 0 %}
+    <div class="rn-section">
+        <h3 class="rn-section-title">
+            Revenue &amp; Growth
+            {% if dr.quality.revenue_cagr is not none %}
+            <span class="cagr-chip">CAGR {{ "%.1f"|format(dr.quality.revenue_cagr) }}%</span>
+            {% endif %}
+        </h3>
+        <table class="rn-table">
+            <thead>
+                <tr>
+                    <th>Year</th>
+                    <th>Revenue</th>
+                    <th>YoY Growth</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in dr.revenue_history %}
+                <tr>
+                    <td>{{ row.year }}</td>
+                    <td style="text-align:right;color:var(--text-primary);font-weight:500;">{{ fmt_number(row.revenue) }}</td>
+                    <td style="text-align:right;">
+                        {% if row.growth_pct is not none %}
+                        <span class="{{ 'growth-positive' if row.growth_pct >= 0 else 'growth-negative' }}">
+                            {{ '+' if row.growth_pct >= 0 else '' }}{{ "%.1f"|format(row.growth_pct) }}%
+                        </span>
+                        {% else %}
+                        <span style="color:var(--text-muted);">--</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+
+    {% set bs = dr.balance_sheet %}
+    <div class="rn-section">
+        <h3 class="rn-section-title">Balance Sheet Health</h3>
+        <div class="metric-grid">
+            <div class="metric-card">
+                <div class="mc-label">Debt / Equity</div>
+                <div class="mc-value {{ 'mc-value--positive' if bs.debt_to_equity is not none and bs.debt_to_equity < 1 else 'mc-value--warning' if bs.debt_to_equity is not none and bs.debt_to_equity < 2 else 'mc-value--negative' if bs.debt_to_equity is not none else '' }}">
+                    {{ "%.2f"|format(bs.debt_to_equity) if bs.debt_to_equity is not none else 'N/A' }}x
+                </div>
+                <div class="mc-sub">{{ 'Conservative' if bs.debt_to_equity is not none and bs.debt_to_equity < 1 else 'Moderate' if bs.debt_to_equity is not none and bs.debt_to_equity < 2 else 'Elevated' if bs.debt_to_equity is not none else '' }}</div>
+            </div>
+            <div class="metric-card">
+                <div class="mc-label">Current Ratio</div>
+                <div class="mc-value {{ 'mc-value--positive' if bs.current_ratio is not none and bs.current_ratio >= 1.5 else 'mc-value--warning' if bs.current_ratio is not none and bs.current_ratio >= 1 else 'mc-value--negative' if bs.current_ratio is not none else '' }}">
+                    {{ "%.2f"|format(bs.current_ratio) if bs.current_ratio is not none else 'N/A' }}x
+                </div>
+                <div class="mc-sub">{{ 'Strong' if bs.current_ratio is not none and bs.current_ratio >= 1.5 else 'Adequate' if bs.current_ratio is not none and bs.current_ratio >= 1 else 'Tight' if bs.current_ratio is not none else '' }}</div>
+            </div>
+            <div class="metric-card">
+                <div class="mc-label">Cash &amp; Equivalents</div>
+                <div class="mc-value">{{ fmt_number(bs.cash_and_equivalents) }}</div>
+                {% if bs.total_debt is not none %}
+                <div class="mc-sub">Debt: {{ fmt_number(bs.total_debt) }}</div>
+                {% endif %}
+            </div>
+            <div class="metric-card">
+                <div class="mc-label">Net {{ 'Cash' if bs.net_cash is not none and bs.net_cash >= 0 else 'Debt' }}</div>
+                <div class="mc-value {{ 'mc-value--positive' if bs.net_cash is not none and bs.net_cash >= 0 else 'mc-value--negative' if bs.net_cash is not none else '' }}">
+                    {{ fmt_number(bs.net_cash) if bs.net_cash is not none else 'N/A' }}
+                </div>
+                <div class="mc-sub">{{ 'Balance sheet positive' if bs.net_cash is not none and bs.net_cash >= 0 else 'Net leverage' if bs.net_cash is not none else '' }}</div>
+            </div>
+        </div>
+    </div>
+
+    {% set fcf = dr.fcf %}
+    {% if fcf.fcf_history and fcf.fcf_history | length > 0 %}
+    <div class="rn-section">
+        <h3 class="rn-section-title">Free Cash Flow</h3>
+        <div class="fcf-header-row">
+            {% if fcf.fcf_yield is not none %}
+            <div class="fcf-pill">FCF Yield: <strong>{{ "%.2f"|format(fcf.fcf_yield) }}%</strong></div>
+            {% endif %}
+            {% if fcf.capex_to_revenue is not none %}
+            <div class="fcf-pill">CapEx / Revenue: <strong>{{ "%.1f"|format(fcf.capex_to_revenue) }}%</strong></div>
+            {% endif %}
+        </div>
+        <table class="rn-table">
+            <thead>
+                <tr>
+                    <th>Year</th>
+                    <th>Free Cash Flow</th>
+                    <th>YoY Growth</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in fcf.fcf_history %}
+                <tr>
+                    <td>{{ row.year }}</td>
+                    <td style="text-align:right;color:{{ 'var(--color-positive)' if row.fcf >= 0 else 'var(--color-negative)' }};font-weight:500;">
+                        {{ fmt_number(row.fcf) }}
+                    </td>
+                    <td style="text-align:right;">
+                        {% if row.growth_pct is not none %}
+                        <span class="{{ 'growth-positive' if row.growth_pct >= 0 else 'growth-negative' }}">
+                            {{ '+' if row.growth_pct >= 0 else '' }}{{ "%.1f"|format(row.growth_pct) }}%
+                        </span>
+                        {% else %}
+                        <span style="color:var(--text-muted);">--</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+
+    {% set val = dr.valuation %}
+    <div class="rn-section">
+        <h3 class="rn-section-title">Valuation Snapshot</h3>
+        <div class="valuation-grid">
+            <div class="val-card">
+                <span class="vc-label">P/E (Trailing)</span>
+                <span class="vc-value">{{ "%.1f"|format(val.pe_trailing) if val.pe_trailing is not none else 'N/A' }}{{ 'x' if val.pe_trailing is not none else '' }}</span>
+            </div>
+            <div class="val-card">
+                <span class="vc-label">P/E (Forward)</span>
+                <span class="vc-value">{{ "%.1f"|format(val.pe_forward) if val.pe_forward is not none else 'N/A' }}{{ 'x' if val.pe_forward is not none else '' }}</span>
+            </div>
+            <div class="val-card">
+                <span class="vc-label">P/S Ratio</span>
+                <span class="vc-value">{{ "%.2f"|format(val.ps_ratio) if val.ps_ratio is not none else 'N/A' }}{{ 'x' if val.ps_ratio is not none else '' }}</span>
+            </div>
+            <div class="val-card">
+                <span class="vc-label">P/B Ratio</span>
+                <span class="vc-value">{{ "%.2f"|format(val.pb_ratio) if val.pb_ratio is not none else 'N/A' }}{{ 'x' if val.pb_ratio is not none else '' }}</span>
+            </div>
+            <div class="val-card">
+                <span class="vc-label">EV / EBITDA</span>
+                <span class="vc-value">{{ "%.1f"|format(val.ev_ebitda) if val.ev_ebitda is not none else 'N/A' }}{{ 'x' if val.ev_ebitda is not none else '' }}</span>
+            </div>
+            <div class="val-card">
+                <span class="vc-label">PEG Ratio</span>
+                <span class="vc-value">{{ "%.2f"|format(val.peg_ratio) if val.peg_ratio is not none else 'N/A' }}{{ 'x' if val.peg_ratio is not none else '' }}</span>
+            </div>
+            <div class="val-card">
+                <span class="vc-label">Market Cap</span>
+                <span class="vc-value" style="font-size:0.95rem;">{{ fmt_number(val.market_cap) }}</span>
+            </div>
+            <div class="val-card">
+                <span class="vc-label">Enterprise Value</span>
+                <span class="vc-value" style="font-size:0.95rem;">{{ fmt_number(val.enterprise_value) }}</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="rn-section">
+        <h3 class="rn-section-title">Management &amp; Ownership</h3>
+        <div class="ownership-grid">
+            <div class="ownership-row">
+                <div class="own-item">
+                    <span class="own-label">Insider Ownership</span>
+                    <span class="own-value">{{ "%.1f"|format(dr.quality.insider_pct) ~ '%' if dr.quality.insider_pct is not none else 'N/A' }}</span>
+                </div>
+                {% if dr.quality.insider_pct is not none %}
+                <div class="own-bar-wrap"><div class="own-bar" style="width:{{ [dr.quality.insider_pct, 100] | min }}%;background-color:var(--accent-blue);"></div></div>
+                {% endif %}
+                <div class="own-item">
+                    <span class="own-label">Institutional Ownership</span>
+                    <span class="own-value">{{ "%.1f"|format(dr.quality.institution_pct) ~ '%' if dr.quality.institution_pct is not none else 'N/A' }}</span>
+                </div>
+                {% if dr.quality.institution_pct is not none %}
+                <div class="own-bar-wrap"><div class="own-bar" style="width:{{ [dr.quality.institution_pct, 100] | min }}%;background-color:var(--accent-green);"></div></div>
+                {% endif %}
+                {% if dr.dividend.dividend_yield is not none %}
+                <div class="own-item">
+                    <span class="own-label">Dividend Yield</span>
+                    <span class="own-value">{{ "%.2f"|format(dr.dividend.dividend_yield) }}%</span>
+                </div>
+                {% endif %}
+                {% if dr.dividend.payout_ratio is not none %}
+                <div class="own-item">
+                    <span class="own-label">Payout Ratio</span>
+                    <span class="own-value">{{ "%.1f"|format(dr.dividend.payout_ratio * 100) if dr.dividend.payout_ratio <= 1 else "%.1f"|format(dr.dividend.payout_ratio) }}%</span>
+                </div>
+                {% endif %}
+            </div>
+            <div class="ownership-row">
+                <div class="own-item">
+                    <span class="own-label">Return on Equity (ROE)</span>
+                    <span class="own-value {{ 'mc-value--positive' if dr.quality.roe is not none and dr.quality.roe >= 15 else 'mc-value--warning' if dr.quality.roe is not none and dr.quality.roe >= 8 else 'mc-value--negative' if dr.quality.roe is not none else '' }}">
+                        {{ "%.1f"|format(dr.quality.roe) ~ '%' if dr.quality.roe is not none else 'N/A' }}
+                    </span>
+                </div>
+                <div class="own-item">
+                    <span class="own-label">Return on Assets (ROA)</span>
+                    <span class="own-value {{ 'mc-value--positive' if dr.quality.roa is not none and dr.quality.roa >= 5 else 'mc-value--warning' if dr.quality.roa is not none and dr.quality.roa >= 2 else 'mc-value--negative' if dr.quality.roa is not none else '' }}">
+                        {{ "%.1f"|format(dr.quality.roa) ~ '%' if dr.quality.roa is not none else 'N/A' }}
+                    </span>
+                </div>
+                <div class="own-item">
+                    <span class="own-label">Return on Invested Capital (ROIC)</span>
+                    <span class="own-value {{ 'mc-value--positive' if dr.quality.roic is not none and dr.quality.roic >= 12 else 'mc-value--warning' if dr.quality.roic is not none and dr.quality.roic >= 6 else 'mc-value--negative' if dr.quality.roic is not none else '' }}">
+                        {{ "%.1f"|format(dr.quality.roic) ~ '%' if dr.quality.roic is not none else 'N/A' }}
+                    </span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+</div>
+{% endif %}
+{% endblock %}

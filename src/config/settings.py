@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     PROCESSED_DATA_DIR: Path = DATA_DIR / "processed"
     
     # Database
-    DB_PATH: Path = PROCESSED_DATA_DIR / "stock_metrics.db"
+    DB_PATH: Path = PROCESSED_DATA_DIR / "stock_metrics_v2.db"
     TABLE_NAME: str = "valuation_momentum"
     
     # API Settings
@@ -31,9 +31,21 @@ class Settings(BaseSettings):
 
     # Crypto Settings
     CRYPTO_TABLE_NAME: str = "crypto_metrics"
-    CRYPTO_MA_PERIOD: int = 20
-    CRYPTO_DEFAULT_TIMEFRAME: str = "1h"
+    # Note: MCP get_candlestick returns max 50 candles, so MA50 is the practical max
+    CRYPTO_MA_PERIOD: int = 50
+    CRYPTO_DEFAULT_TIMEFRAME: str = "1D"
     CRYPTO_DATA_AGE_LIMIT_MINUTES: int = 5
+    # USD pairs from crypto.com MCP - major/high-volume instruments
+    CRYPTO_DEFAULT_SYMBOLS: list = [
+        "BTCUSD", "ETHUSD", "SOLUSD", "XRPUSD", "DOGEUSD", "ADAUSD",
+        "AVAXUSD", "DOTUSD", "LINKUSD", "MATICUSD", "SHIBUSD", "LTCUSD",
+        "BCHUSD", "UNIUSD", "ATOMUSD", "XLMUSD", "ALGOUSD", "FILUSD",
+        "NEARUSD", "APTUSD", "ARBUSD", "OPUSD", "SUIUSD", "TONUSD",
+        "PEPEUSD", "BONKUSD", "FLOKIUSD", "WIFUSD", "ICPUSD", "HBARUSD",
+        "INJUSD", "RENDERUSD", "FETUSDT", "AAVEUSD", "GRTUSD", "SANDUSD",
+        "MANAUSD", "AXSUSD", "ENSUSD", "LDOUSD", "MKRUSD", "SNXUSD",
+        "COMPUSD", "YFIUSD", "CRVUSD", "1INCHUSD", "BATUSD", "ZRXUSD"
+    ]
     
     # Logging
     LOG_LEVEL: str = "INFO"

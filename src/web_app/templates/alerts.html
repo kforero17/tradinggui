@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block title %}Alerts{% endblock %}
+
+{% block head_extra %}
+<style>
+    .alerts-layout { display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; }
+    .section-title { color: var(--text-heading); font-size: 1.2rem; margin-bottom: 1rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem; }
+    .create-form { display: grid; grid-template-columns: 1fr 1fr 1fr auto; gap: 0.75rem; align-items: end; margin-bottom: 2rem; }
+    .create-form .form-group { display: flex; flex-direction: column; gap: 0.3rem; }
+    .create-form label { color: var(--text-muted); font-size: 0.85rem; }
+    .alert-table { width: 100%; border-collapse: collapse; }
+    .alert-table th, .alert-table td { padding: 0.75rem; text-align: left; border-bottom: 1px solid var(--border-color); font-size: 0.9rem; }
+    .alert-table th { color: var(--text-muted); font-weight: normal; }
+    .alert-type-badge { display: inline-block; padding: 0.2rem 0.5rem; border-radius: 3px; font-size: 0.8rem; background-color: var(--bg-header); }
+    .triggered-row { background-color: rgba(255, 193, 7, 0.08); }
+    .actions-cell { display: flex; gap: 0.5rem; }
+    .actions-cell form { margin: 0; }
+    @media (max-width: 900px) { .alerts-layout { grid-template-columns: 1fr; } .create-form { grid-template-columns: 1fr; } }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header"><h1>Trade Alerts</h1></div>
+
+<!-- Create Alert Form -->
+<div class="card" style="margin-bottom: 2rem;">
+    <div class="section-title">Create New Alert</div>
+    <form action="{{ url_for('create_alert') }}" method="post" class="create-form">
+        <div class="form-group">
+            <label for="alert-ticker">Ticker</label>
+            <input type="text" id="alert-ticker" name="ticker" placeholder="e.g. AAPL" required>
+        </div>
+        <div class="form-group">
+            <label for="alert-type">Condition</label>
+            <select id="alert-type" name="alert_type" required>
+                <option value="price_above">Price Above</option>
+                <option value="price_below">Price Below</option>
+                <option value="rsi_overbought">RSI Overbought (&ge;)</option>
+                <option value="rsi_oversold">RSI Oversold (&le;)</option>
+                <option value="macd_crossover">MACD Bullish Crossover</option>
+                <option value="pct_change">% Change &ge; (abs)</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <label for="alert-threshold">Threshold</label>
+            <input type="number" id="alert-threshold" name="threshold" step="0.01" placeholder="e.g. 150.00" required>
+        </div>
+        <button type="submit">Create Alert</button>
+    </form>
+</div>
+
+<div class="alerts-layout">
+    <!-- Triggered Alerts -->
+    <div class="card">
+        <div class="section-title">Triggered Alerts ({{ triggered_alerts|length }})</div>
+        {% if triggered_alerts %}
+        <table class="alert-table">
+            <thead><tr><th>Ticker</th><th>Condition</th><th>Threshold</th><th>Triggered</th><th>Actions</th></tr></thead>
+            <tbody>
+            {% for a in triggered_alerts %}
+            <tr class="triggered-row">
+                <td><strong>{{ a.ticker }}</strong></td>
+                <td><span class="alert-type-badge">{{ a.alert_type }}</span></td>
+                <td>{{ a.threshold }}</td>
+                <td>{{ a.triggered_at.strftime('%Y-%m-%d %H:%M') if a.triggered_at else '—' }}</td>
+                <td class="actions-cell">
+                    <form action="{{ url_for('dismiss_alert', alert_id=a.id) }}" method="post">
+                        <button type="submit" class="btn-sm">Dismiss</button>
+                    </form>
+                    <form action="{{ url_for('delete_alert', alert_id=a.id) }}" method="post">
+                        <button type="submit" class="btn-sm btn-danger">Delete</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p class="text-muted">No triggered alerts.</p>
+        {% endif %}
+    </div>
+
+    <!-- Pending Alerts -->
+    <div class="card">
+        <div class="section-title">Active Alerts ({{ pending_alerts|length }})</div>
+        {% if pending_alerts %}
+        <table class="alert-table">
+            <thead><tr><th>Ticker</th><th>Condition</th><th>Threshold</th><th>Created</th><th>Actions</th></tr></thead>
+            <tbody>
+            {% for a in pending_alerts %}
+            <tr>
+                <td><strong>{{ a.ticker }}</strong></td>
+                <td><span class="alert-type-badge">{{ a.alert_type }}</span></td>
+                <td>{{ a.threshold }}</td>
+                <td>{{ a.created_at.strftime('%Y-%m-%d %H:%M') if a.created_at else '—' }}</td>
+                <td class="actions-cell">
+                    <form action="{{ url_for('delete_alert', alert_id=a.id) }}" method="post">
+                        <button type="submit" class="btn-sm btn-danger">Delete</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p class="text-muted">No active alerts. Create one above.</p>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

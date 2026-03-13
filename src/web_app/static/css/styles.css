@@ -1,0 +1,302 @@
+/* ── CSS Variables ──────────────────────────────────────────────── */
+:root {
+    --bg-primary: #121212;
+    --bg-card: #1e1e1e;
+    --bg-card-hover: #252525;
+    --bg-input: #222;
+    --bg-header: #2a2a2a;
+    --border-color: #333;
+    --text-primary: #e0e0e0;
+    --text-heading: #ffffff;
+    --text-muted: #aaa;
+    --accent-blue: #007bff;
+    --accent-blue-hover: #0056b3;
+    --accent-green: #00D4AA;
+    --color-positive: #28a745;
+    --color-negative: #dc3545;
+    --color-warning: #ffc107;
+    --color-info: #17a2b8;
+    --font-stack: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+/* ── Base ───────────────────────────────────────────────────────── */
+* { box-sizing: border-box; }
+body {
+    font-family: var(--font-stack);
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+    margin: 0;
+    padding: 0;
+}
+.container {
+    max-width: 1400px;
+    margin: auto;
+    padding: 0 2rem 2rem;
+}
+h1 {
+    color: var(--text-heading);
+    text-align: center;
+    margin: 0;
+}
+
+/* ── Navbar ─────────────────────────────────────────────────────── */
+.navbar {
+    background-color: var(--bg-card);
+    border-bottom: 1px solid var(--border-color);
+    padding: 0.75rem 2rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+}
+.navbar-brand {
+    color: var(--accent-green);
+    font-size: 1.25rem;
+    font-weight: bold;
+    text-decoration: none;
+}
+.navbar-links {
+    display: flex;
+    gap: 0.25rem;
+}
+.navbar-links a {
+    color: var(--text-muted);
+    text-decoration: none;
+    padding: 0.5rem 1rem;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    transition: background-color 0.15s, color 0.15s;
+}
+.navbar-links a:hover {
+    background-color: var(--bg-header);
+    color: var(--text-heading);
+}
+.navbar-links a.active {
+    background-color: var(--accent-blue);
+    color: white;
+}
+.navbar-right {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+.alert-badge {
+    position: relative;
+    color: var(--text-muted);
+    text-decoration: none;
+    font-size: 1.1rem;
+    padding: 0.4rem 0.6rem;
+    border-radius: 6px;
+    transition: background-color 0.15s;
+}
+.alert-badge:hover {
+    background-color: var(--bg-header);
+    color: var(--text-heading);
+}
+.alert-count {
+    position: absolute;
+    top: -2px;
+    right: -4px;
+    background-color: var(--color-negative);
+    color: white;
+    font-size: 0.65rem;
+    padding: 1px 5px;
+    border-radius: 10px;
+    font-weight: bold;
+}
+
+/* ── Flash Messages ────────────────────────────────────────────── */
+.flashes {
+    list-style: none;
+    padding: 0;
+    margin: 1rem 0;
+}
+.flashes li {
+    padding: 1rem;
+    margin-bottom: 0.5rem;
+    border-radius: 4px;
+}
+.flashes .success { background-color: var(--color-positive); color: white; }
+.flashes .error { background-color: var(--color-negative); color: white; }
+.flashes .warning { background-color: var(--color-warning); color: black; }
+
+/* ── Page Header ───────────────────────────────────────────────── */
+.page-header {
+    text-align: center;
+    padding: 1.5rem 0 1rem;
+}
+
+/* ── Cards ──────────────────────────────────────────────────────── */
+.card {
+    background-color: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 1.5rem;
+}
+.summary-card {
+    background-color: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 1.25rem 2rem;
+    text-align: center;
+    min-width: 200px;
+}
+.summary-card.total-value { border-color: var(--accent-blue); }
+.summary-card.positive { border-color: var(--color-positive); }
+.summary-card.negative { border-color: var(--color-negative); }
+.summary-label { color: var(--text-muted); font-size: 0.9rem; margin-bottom: 0.5rem; }
+.summary-value { font-size: 1.5rem; font-weight: bold; color: var(--text-heading); }
+.summary-percent { font-size: 1rem; font-weight: normal; }
+
+/* ── Tables ─────────────────────────────────────────────────────── */
+.data-table {
+    background-color: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    overflow: hidden;
+}
+.data-table table { width: 100%; border-collapse: collapse; }
+.data-table th, .data-table td { padding: 1rem; text-align: left; border-bottom: 1px solid var(--border-color); }
+.data-table th { background-color: var(--bg-header); color: var(--text-muted); font-weight: normal; position: sticky; top: 0; }
+.data-table tr:hover { background-color: var(--bg-card-hover); }
+
+/* ── Buttons ────────────────────────────────────────────────────── */
+button, .btn {
+    padding: 0.75rem 1.5rem;
+    border: none;
+    background-color: var(--accent-blue);
+    color: white;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.9rem;
+    transition: background-color 0.15s;
+}
+button:hover, .btn:hover { background-color: var(--accent-blue-hover); }
+.btn-danger { background-color: var(--color-negative); }
+.btn-danger:hover { background-color: #c82333; }
+.btn-success { background-color: var(--color-positive); }
+.btn-success:hover { background-color: #218838; }
+.btn-sm { padding: 0.5rem 1rem; font-size: 0.85rem; }
+
+/* ── Inputs ─────────────────────────────────────────────────────── */
+input[type="text"], input[type="number"], select {
+    padding: 0.75rem;
+    border: 1px solid var(--border-color);
+    background-color: var(--bg-input);
+    color: var(--text-primary);
+    border-radius: 4px;
+    font-size: 0.9rem;
+}
+input[type="text"]:focus, input[type="number"]:focus, select:focus {
+    outline: none;
+    border-color: var(--accent-blue);
+}
+
+/* ── Filters ────────────────────────────────────────────────────── */
+.filters-container {
+    background-color: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 1.5rem;
+    margin-bottom: 2rem;
+}
+.filters-row { display: flex; gap: 2rem; align-items: center; flex-wrap: wrap; }
+.filter-group { display: flex; flex-direction: column; gap: 0.5rem; min-width: 200px; }
+.filter-group label { color: var(--text-muted); font-size: 0.9rem; }
+.slider-container { display: flex; align-items: center; gap: 1rem; }
+input[type="range"] { flex-grow: 1; min-width: 150px; }
+.slider-value { font-weight: bold; color: var(--accent-blue); min-width: 80px; }
+
+/* ── Modal ──────────────────────────────────────────────────────── */
+.modal {
+    display: none;
+    position: fixed;
+    z-index: 1000;
+    left: 0; top: 0;
+    width: 100%; height: 100%;
+    background-color: rgba(0, 0, 0, 0.8);
+}
+.modal-content {
+    background-color: var(--bg-card);
+    margin: 5% auto;
+    padding: 2rem;
+    border-radius: 8px;
+    width: 90%;
+    max-width: 1000px;
+    max-height: 80%;
+    overflow-y: auto;
+    position: relative;
+}
+.close {
+    color: var(--text-muted);
+    float: right;
+    font-size: 28px;
+    font-weight: bold;
+    cursor: pointer;
+    position: absolute;
+    right: 20px;
+    top: 15px;
+}
+.close:hover { color: var(--text-heading); }
+.modal-title { margin-top: 0; color: var(--text-heading); }
+
+/* ── Metrics Grid (used in modals and analytics) ───────────────── */
+.metrics-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 1rem;
+    margin-bottom: 2rem;
+}
+.metric-card {
+    background-color: var(--bg-header);
+    padding: 1rem;
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+}
+.metric-label { color: var(--text-muted); font-size: 0.85rem; margin-bottom: 0.25rem; }
+.metric-value { color: var(--text-heading); font-size: 1.25rem; font-weight: bold; }
+
+/* ── Color Utilities ────────────────────────────────────────────── */
+.positive { color: var(--color-positive); }
+.negative { color: var(--color-negative); }
+.text-muted { color: var(--text-muted); }
+.text-center { text-align: center; }
+
+/* ── Loading ────────────────────────────────────────────────────── */
+.loading { text-align: center; padding: 2rem; color: var(--text-muted); }
+.spinner {
+    display: inline-block;
+    width: 24px; height: 24px;
+    border: 3px solid var(--border-color);
+    border-top-color: var(--accent-blue);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    margin-right: 0.5rem;
+    vertical-align: middle;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Chart Container ────────────────────────────────────────────── */
+.chart-container { margin-top: 1.5rem; }
+.plot-container { flex-grow: 1; min-height: 300px; }
+
+/* ── Ticker Cell (clickable) ────────────────────────────────────── */
+.ticker-cell {
+    font-weight: bold;
+    color: var(--accent-blue);
+    cursor: pointer;
+}
+.ticker-cell:hover { text-decoration: underline; }
+
+/* ── Alert Banner ───────────────────────────────────────────────── */
+.alerts-banner {
+    background-color: #332700;
+    border-bottom: 1px solid var(--color-warning);
+    padding: 0.75rem 2rem;
+    display: none;
+}
+.alerts-banner.visible { display: flex; align-items: center; justify-content: space-between; }
+.alerts-banner-text { color: var(--color-warning); font-size: 0.9rem; }
+.alerts-banner-text a { color: var(--color-warning); font-weight: bold; }

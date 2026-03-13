@@ -38,6 +38,148 @@ class StockdexAPIError(Exception):
     """Custom exception for Stockdex API errors."""
     pass
 
+
+# ── Technical indicator calculations ──────────────────────────────────
+
+def calculate_rsi(close_prices: pd.Series, period: int = 14) -> Optional[float]:
+    """Calculate Relative Strength Index (RSI).
+
+    Uses exponential smoothing (Wilder's method) for average gain/loss.
+    Returns None if insufficient data.
+    """
+    if close_prices is None or len(close_prices) < period + 1:
+        return None
+
+    delta = close_prices.diff()
+    gains = delta.clip(lower=0)
+    losses = (-delta.clip(upper=0))
+
+    # Wilder's smoothing (equivalent to EMA with alpha = 1/period)
+    avg_gain = gains.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
+    avg_loss = losses.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
+
+    last_avg_gain = avg_gain.iloc[-1]
+    last_avg_loss = avg_loss.iloc[-1]
+
+    if last_avg_loss == 0:
+        return 100.0
+
+    rs = last_avg_gain / last_avg_loss
+    rsi = 100.0 - (100.0 / (1.0 + rs))
+
+    if np.isnan(rsi) or np.isinf(rsi):
+        return None
+    return round(float(rsi), 2)
+
+
+def calculate_macd(
+    close_prices: pd.Series,
+    fast_period: int = 12,
+    slow_period: int = 26,
+    signal_period: int = 9
+) -> Dict[str, Optional[float]]:
+    """Calculate MACD line, signal line, and histogram.
+
+    Returns dict with 'macd', 'macd_signal', 'macd_histogram'.
+    All values are None if insufficient data.
+    """
+    result = {'macd': None, 'macd_signal': None, 'macd_histogram': None}
+
+    min_required = slow_period + signal_period
+    if close_prices is None or len(close_prices) < min_required:
+        return result
+
+    fast_ema = close_prices.ewm(span=fast_period, adjust=False).mean()
+    slow_ema = close_prices.ewm(span=slow_period, adjust=False).mean()
+    macd_line = fast_ema - slow_ema
+    signal_line = macd_line.ewm(span=signal_period, adjust=False).mean()
+    histogram = macd_line - signal_line
+
+    macd_val = macd_line.iloc[-1]
+    signal_val = signal_line.iloc[-1]
+    hist_val = histogram.iloc[-1]
+
+    if any(np.isnan(v) or np.isinf(v) for v in [macd_val, signal_val, hist_val]):
+        return result
+
+    return {
+        'macd': round(float(macd_val), 4),
+        'macd_signal': round(float(signal_val), 4),
+        'macd_histogram': round(float(hist_val), 4),
+    }
+
+
+def calculate_bollinger_bands(
+    close_prices: pd.Series,
+    period: int = 20,
+    num_std: float = 2.0
+) -> Dict[str, Optional[float]]:
+    """Calculate Bollinger Bands (upper, middle, lower).
+
+    Returns dict with 'bb_upper', 'bb_middle', 'bb_lower'.
+    All values are None if insufficient data.
+    """
+    result = {'bb_upper': None, 'bb_middle': None, 'bb_lower': None}
+
+    if close_prices is None or len(close_prices) < period:
+        return result
+
+    sma = close_prices.rolling(window=period).mean()
+    std = close_prices.rolling(window=period).std()
+
+    middle = sma.iloc[-1]
+    std_val = std.iloc[-1]
+
+    if any(np.isnan(v) or np.isinf(v) for v in [middle, std_val]):
+        return result
+
+    return {
+        'bb_upper': round(float(middle + num_std * std_val), 4),
+        'bb_middle': round(float(middle), 4),
+        'bb_lower': round(float(middle - num_std * std_val), 4),
+    }
+
+
+def evaluate_alerts(metrics: Dict[str, Any], active_alerts: List[dict]) -> List[str]:
+    """Evaluate alert conditions against current metrics for a single ticker.
+
+    Args:
+        metrics: Dict of current metrics for one ticker (must contain 'ticker')
+        active_alerts: List of alert dicts from db.get_active_alerts()
+
+    Returns:
+        List of alert IDs that were newly triggered.
+    """
+    ticker = metrics.get('ticker', '')
+    triggered_ids = []
+
+    relevant = [a for a in active_alerts if a['ticker'] == ticker and not a['is_triggered']]
+
+    for alert in relevant:
+        condition_met = False
+        alert_type = alert['alert_type']
+        threshold = alert['threshold']
+
+        if alert_type == 'price_above' and metrics.get('last_price') is not None:
+            condition_met = metrics['last_price'] >= threshold
+        elif alert_type == 'price_below' and metrics.get('last_price') is not None:
+            condition_met = metrics['last_price'] <= threshold
+        elif alert_type == 'rsi_overbought' and metrics.get('rsi_14') is not None:
+            condition_met = metrics['rsi_14'] >= threshold
+        elif alert_type == 'rsi_oversold' and metrics.get('rsi_14') is not None:
+            condition_met = metrics['rsi_14'] <= threshold
+        elif alert_type == 'macd_crossover' and metrics.get('macd_histogram') is not None:
+            # Triggered when MACD histogram crosses above zero (bullish crossover)
+            condition_met = metrics['macd_histogram'] > 0
+        elif alert_type == 'pct_change' and metrics.get('pct_above_ma_100') is not None:
+            condition_met = abs(metrics['pct_above_ma_100']) >= threshold
+
+        if condition_met:
+            triggered_ids.append(alert['id'])
+            logger.info(f"Alert triggered: {alert_type} for {ticker} (threshold: {threshold})")
+
+    return triggered_ids
+
 class StockMetricsCalculator:
     def __init__(self, use_mock_data: bool = False):
         self.lookback_days = settings.HISTORICAL_LOOKBACK_DAYS
@@ -141,7 +283,7 @@ class StockMetricsCalculator:
         metrics = {
             "market_cap": None, "pe_ratio": None, "pb_ratio": None,
             "enterprise_value": None, "ebitda": None, "ebitda_ev": None,
-            "ps_ratio": None,
+            "ps_ratio": None, "sector": None, "industry": None,
         }
 
         if self.use_mock_data:
@@ -184,6 +326,10 @@ class StockMetricsCalculator:
             if enterprise_value and ebitda and ebitda > 0:
                 ev_ebitda = enterprise_value / ebitda
 
+            # Sector and industry classification
+            sector = info.get('sector', None)
+            industry = info.get('industry', None)
+
             metrics.update({
                 "pe_ratio": pe_ratio,
                 "pb_ratio": pb_ratio,
@@ -191,6 +337,8 @@ class StockMetricsCalculator:
                 "ebitda": ebitda,
                 "ebitda_ev": ev_ebitda,
                 "ps_ratio": ps_ratio,
+                "sector": sector,
+                "industry": industry,
             })
             return metrics
         except Exception as e:
@@ -226,8 +374,8 @@ class StockMetricsCalculator:
         
         return None
 
-    def calculate_momentum_metrics(self, hist_data: pd.DataFrame) -> Dict[str, float]:
-        """Calculate momentum-based metrics."""
+    def calculate_momentum_metrics(self, hist_data: pd.DataFrame) -> Dict[str, Any]:
+        """Calculate momentum-based metrics including technical indicators."""
         if hist_data is None or hist_data.shape[0] < 100:
             raise ValueError("Insufficient historical data for momentum calculation.")
 
@@ -236,12 +384,20 @@ class StockMetricsCalculator:
         ema_100 = close_prices.ewm(span=100, adjust=False).mean().iloc[-1]
         last_price = close_prices.iloc[-1]
 
+        # Technical indicators
+        rsi_val = calculate_rsi(close_prices, period=14)
+        macd_vals = calculate_macd(close_prices)
+        bb_vals = calculate_bollinger_bands(close_prices)
+
         return {
             "last_price": last_price,
             "ma_100": ma_100,
             "ema_100": ema_100,
             "pct_above_ma_100": (last_price - ma_100) / ma_100 * 100 if ma_100 else 0,
-            "pct_above_ema_100": (last_price - ema_100) / ema_100 * 100 if ema_100 else 0
+            "pct_above_ema_100": (last_price - ema_100) / ema_100 * 100 if ema_100 else 0,
+            "rsi_14": rsi_val,
+            **macd_vals,
+            **bb_vals,
         }
 
     def get_metrics(self, ticker: str) -> Optional[Dict[str, Any]]:
@@ -446,11 +602,41 @@ def _compute_gain_values(current_price: float, reference_price: float,
     }
 
 
-def calculate_portfolio_summary(positions: List[Dict]) -> Dict[str, Any]:
-    """Calculate aggregate portfolio metrics.
+def get_year_start_price(hist_data: pd.DataFrame) -> Optional[float]:
+    """Get the first available price at the start of the current year.
+
+    Args:
+        hist_data: DataFrame with 'close' prices indexed by date
+
+    Returns:
+        The closing price on the first trading day of the current year, or None if unavailable
+    """
+    if hist_data is None or hist_data.empty:
+        return None
+
+    close_prices = hist_data['close'].dropna()
+    if close_prices.empty:
+        return None
+
+    tz = close_prices.index.tz
+    current_year = datetime.utcnow().year
+    first_of_year = pd.Timestamp(current_year, 1, 1, tz=tz)
+
+    available_dates = close_prices.index[close_prices.index >= first_of_year]
+    if available_dates.empty:
+        return None
+
+    return float(close_prices.loc[available_dates[0]])
+
+
+def calculate_portfolio_summary(
+    positions: List[Dict], ytd_realized_gains: float = 0.0
+) -> Dict[str, Any]:
+    """Calculate aggregate portfolio metrics including realized gains.
 
     Args:
         positions: List of position dicts with 'current_value' and 'gains' keys
+        ytd_realized_gains: Total realized gains from sold positions this year
 
     Returns:
         Dictionary with total_value, day/ytd gain dollars and percentages
@@ -460,7 +646,9 @@ def calculate_portfolio_summary(positions: List[Dict]) -> Dict[str, Any]:
             'total_value': 0.0,
             'day_gain_dollars': 0.0,
             'day_gain_percent': 0.0,
-            'ytd_gain_dollars': 0.0,
+            'ytd_unrealized_gain_dollars': 0.0,
+            'ytd_realized_gain_dollars': ytd_realized_gains,
+            'ytd_total_gain_dollars': ytd_realized_gains,
             'ytd_gain_percent': 0.0
         }
 
@@ -471,22 +659,26 @@ def calculate_portfolio_summary(positions: List[Dict]) -> Dict[str, Any]:
         for p in positions
     )
 
-    ytd_gain_dollars = sum(
+    ytd_unrealized_gain_dollars = sum(
         p.get('gains', {}).get('YTD', {}).get('gain_dollars', 0) or 0
         for p in positions
     )
 
+    ytd_total_gain_dollars = ytd_unrealized_gain_dollars + ytd_realized_gains
+
     yesterday_value = total_value - day_gain_dollars
-    ytd_start_value = total_value - ytd_gain_dollars
+    ytd_start_value = total_value - ytd_unrealized_gain_dollars
 
     day_gain_percent = (day_gain_dollars / yesterday_value * 100) if yesterday_value > 0 else 0
-    ytd_gain_percent = (ytd_gain_dollars / ytd_start_value * 100) if ytd_start_value > 0 else 0
+    ytd_gain_percent = (ytd_total_gain_dollars / ytd_start_value * 100) if ytd_start_value > 0 else 0
 
     return {
         'total_value': round(total_value, 2),
         'day_gain_dollars': round(day_gain_dollars, 2),
         'day_gain_percent': round(day_gain_percent, 2),
-        'ytd_gain_dollars': round(ytd_gain_dollars, 2),
+        'ytd_unrealized_gain_dollars': round(ytd_unrealized_gain_dollars, 2),
+        'ytd_realized_gain_dollars': round(ytd_realized_gains, 2),
+        'ytd_total_gain_dollars': round(ytd_total_gain_dollars, 2),
         'ytd_gain_percent': round(ytd_gain_percent, 2)
     }
 

@@ -1,378 +1,246 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Stock Portfolio</title>
-    <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-            background-color: #121212;
-            color: #e0e0e0;
-            margin: 0;
-            padding: 2rem;
-        }
-        .container {
-            max-width: 1400px;
-            margin: auto;
-        }
-        h1 {
-            color: #ffffff;
-            text-align: center;
-        }
-        .flashes {
-            list-style: none;
-            padding: 0;
-            margin-bottom: 1rem;
-        }
-        .flashes li {
-            padding: 1rem;
-            margin-bottom: 0.5rem;
-            border-radius: 4px;
-        }
-        .flashes .success { background-color: #28a745; color: white; }
-        .flashes .error { background-color: #dc3545; color: white; }
-        .flashes .warning { background-color: #ffc107; color: black; }
+{% extends "base.html" %}
+{% block title %}Stock Portfolio{% endblock %}
 
-        .nav-links {
-            text-align: center;
-            margin-bottom: 2rem;
-        }
-        .nav-links a {
-            color: #007bff;
-            text-decoration: none;
-            margin: 0 1rem;
-        }
-        .nav-links a:hover {
-            text-decoration: underline;
-        }
+{% block head_extra %}
+<script src="https://cdn.plot.ly/plotly-2.26.0.min.js"></script>
+<style>
+    .portfolio-summary { display: flex; gap: 1.5rem; margin-bottom: 2rem; flex-wrap: wrap; justify-content: center; }
+    .add-stock-form { display: flex; gap: 1rem; margin-bottom: 2rem; justify-content: center; flex-wrap: wrap; }
+    .add-stock-form input[type="text"] { width: 200px; }
+    .add-stock-form input[type="number"] { width: 120px; }
+    .portfolio-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(500px, 1fr)); gap: 2rem; }
+    .stock-card { background-color: var(--bg-card); border: 1px solid var(--border-color); border-radius: 8px; padding: 1.5rem; display: flex; flex-direction: column; }
+    .stock-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }
+    .stock-header h2 { margin: 0; font-size: 1.5rem; }
+    .delete-btn { color: var(--color-negative); text-decoration: none; font-size: 0.9rem; }
+    .shares-form { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1rem; }
+    .shares-form label { color: var(--text-muted); }
+    .shares-input { width: 100px; padding: 0.5rem; border: 1px solid var(--border-color); background-color: var(--bg-input); color: var(--text-primary); border-radius: 4px; }
+    .position-forms { display: flex; flex-wrap: wrap; gap: 1rem; margin-bottom: 1rem; }
+    .sell-form { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1rem; padding: 0.75rem; background-color: var(--bg-card-hover); border-radius: 4px; }
+    .sell-form label { color: var(--text-muted); }
+    .position-summary { display: flex; gap: 2rem; margin-bottom: 1rem; padding: 0.75rem; background-color: var(--bg-card-hover); border-radius: 4px; }
+    .position-summary .label { color: var(--text-muted); margin-right: 0.5rem; }
+    .position-summary .value { color: var(--text-heading); font-weight: bold; }
+    .gains-table { width: 100%; border-collapse: collapse; margin-bottom: 1rem; }
+    .gains-table th, .gains-table td { text-align: left; padding: 0.5rem; border-bottom: 1px solid var(--border-color); }
+    .gains-table th { color: var(--text-muted); font-weight: normal; font-size: 0.85rem; }
+    .metrics-table { width: 100%; border-collapse: collapse; margin-bottom: 1rem; }
+    .metrics-table th, .metrics-table td { text-align: left; padding: 0.5rem; border-bottom: 1px solid var(--border-color); }
+    .metrics-table th { color: var(--text-muted); font-weight: normal; }
+    .empty-message { text-align: center; color: var(--text-muted); padding: 2rem; }
+    .risk-section { margin-bottom: 2rem; }
+    .risk-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1.5rem; }
+    .risk-cards { display: flex; gap: 1rem; flex-wrap: wrap; margin-bottom: 1.5rem; }
+    .risk-card { flex: 1; min-width: 140px; }
+    .section-title { color: var(--text-heading); font-size: 1.2rem; margin-bottom: 1rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem; }
+</style>
+{% endblock %}
 
-        /* Portfolio Summary */
-        .portfolio-summary {
-            display: flex;
-            gap: 1.5rem;
-            margin-bottom: 2rem;
-            flex-wrap: wrap;
-            justify-content: center;
-        }
-        .summary-card {
-            background-color: #1e1e1e;
-            border: 1px solid #333;
-            border-radius: 8px;
-            padding: 1.25rem 2rem;
-            text-align: center;
-            min-width: 200px;
-        }
-        .summary-card.total-value {
-            border-color: #007bff;
-        }
-        .summary-card.positive {
-            border-color: #28a745;
-        }
-        .summary-card.negative {
-            border-color: #dc3545;
-        }
-        .summary-label {
-            color: #aaa;
-            font-size: 0.9rem;
-            margin-bottom: 0.5rem;
-        }
-        .summary-value {
-            font-size: 1.5rem;
-            font-weight: bold;
-            color: #fff;
-        }
-        .summary-percent {
-            font-size: 1rem;
-            font-weight: normal;
-        }
-        .positive .summary-value,
-        .positive .summary-percent,
-        td.positive {
-            color: #28a745;
-        }
-        .negative .summary-value,
-        .negative .summary-percent,
-        td.negative {
-            color: #dc3545;
-        }
+{% block content %}
+<div class="page-header"><h1>My Stock Portfolio</h1></div>
 
-        /* Add Stock Form */
-        .add-stock-form {
-            display: flex;
-            gap: 1rem;
-            margin-bottom: 2rem;
-            justify-content: center;
-            flex-wrap: wrap;
-        }
-        .add-stock-form input[type="text"],
-        .add-stock-form input[type="number"] {
-            padding: 0.75rem;
-            border: 1px solid #333;
-            background-color: #222;
-            color: #e0e0e0;
-            border-radius: 4px;
-        }
-        .add-stock-form input[type="text"] {
-            width: 200px;
-        }
-        .add-stock-form input[type="number"] {
-            width: 120px;
-        }
-        button {
-            padding: 0.75rem 1.5rem;
-            border: none;
-            background-color: #007bff;
-            color: white;
-            border-radius: 4px;
-            cursor: pointer;
-        }
-        button:hover {
-            background-color: #0056b3;
-        }
-
-        /* Portfolio Grid */
-        .portfolio-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(500px, 1fr));
-            gap: 2rem;
-        }
-        .stock-card {
-            background-color: #1e1e1e;
-            border: 1px solid #333;
-            border-radius: 8px;
-            padding: 1.5rem;
-            display: flex;
-            flex-direction: column;
-        }
-        .stock-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 1rem;
-        }
-        .stock-header h2 {
-            margin: 0;
-            font-size: 1.5rem;
-        }
-        .delete-btn {
-            color: #dc3545;
-            text-decoration: none;
-            font-size: 0.9rem;
-        }
-
-        /* Share Input Form */
-        .shares-form {
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-            margin-bottom: 1rem;
-        }
-        .shares-form label {
-            color: #aaa;
-        }
-        .shares-input {
-            width: 100px;
-            padding: 0.5rem;
-            border: 1px solid #333;
-            background-color: #222;
-            color: #e0e0e0;
-            border-radius: 4px;
-        }
-        .update-btn {
-            padding: 0.5rem 1rem;
-            font-size: 0.85rem;
-        }
-
-        /* Position Summary */
-        .position-summary {
-            display: flex;
-            gap: 2rem;
-            margin-bottom: 1rem;
-            padding: 0.75rem;
-            background-color: #252525;
-            border-radius: 4px;
-        }
-        .position-summary .label {
-            color: #aaa;
-            margin-right: 0.5rem;
-        }
-        .position-summary .value {
-            color: #fff;
-            font-weight: bold;
-        }
-
-        /* Gains Table */
-        .gains-table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-bottom: 1rem;
-        }
-        .gains-table th, .gains-table td {
-            text-align: left;
-            padding: 0.5rem;
-            border-bottom: 1px solid #333;
-        }
-        .gains-table th {
-            color: #aaa;
-            font-weight: normal;
-            font-size: 0.85rem;
-        }
-
-        /* Metrics Table */
-        .metrics-table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-bottom: 1rem;
-        }
-        .metrics-table th, .metrics-table td {
-            text-align: left;
-            padding: 0.5rem;
-            border-bottom: 1px solid #333;
-        }
-        .metrics-table th {
-            color: #aaa;
-            font-weight: normal;
-        }
-
-        .plot-container {
-            flex-grow: 1;
-            min-height: 300px;
-        }
-
-        .empty-message {
-            text-align: center;
-            color: #aaa;
-            padding: 2rem;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>My Stock Portfolio</h1>
-
-        <div class="nav-links">
-            <a href="{{ url_for('portfolio') }}">My Portfolio</a>
-            <a href="{{ url_for('research') }}">Research</a>
-            <a href="{{ url_for('momentum') }}">Momentum</a>
-            <a href="{{ url_for('crypto') }}">Crypto</a>
-        </div>
-
-        {% with messages = get_flashed_messages(with_categories=true) %}
-            {% if messages %}
-                <ul class="flashes">
-                {% for category, message in messages %}
-                    <li class="{{ category }}">{{ message }}</li>
-                {% endfor %}
-                </ul>
-            {% endif %}
-        {% endwith %}
-
-        {% if summary %}
-        <div class="portfolio-summary">
-            <div class="summary-card total-value">
-                <div class="summary-label">Total Portfolio Value</div>
-                <div class="summary-value">${{ "{:,.2f}".format(summary.total_value) }}</div>
-            </div>
-            <div class="summary-card {{ 'positive' if summary.day_gain_dollars >= 0 else 'negative' }}">
-                <div class="summary-label">Day's Gain</div>
-                <div class="summary-value">
-                    {{ "+" if summary.day_gain_dollars >= 0 else "" }}${{ "{:,.2f}".format(summary.day_gain_dollars) }}
-                    <span class="summary-percent">({{ "+" if summary.day_gain_percent >= 0 else "" }}{{ "%.2f"|format(summary.day_gain_percent) }}%)</span>
-                </div>
-            </div>
-            <div class="summary-card {{ 'positive' if summary.ytd_gain_dollars >= 0 else 'negative' }}">
-                <div class="summary-label">YTD Gain</div>
-                <div class="summary-value">
-                    {{ "+" if summary.ytd_gain_dollars >= 0 else "" }}${{ "{:,.2f}".format(summary.ytd_gain_dollars) }}
-                    <span class="summary-percent">({{ "+" if summary.ytd_gain_percent >= 0 else "" }}{{ "%.2f"|format(summary.ytd_gain_percent) }}%)</span>
-                </div>
-            </div>
-        </div>
-        {% endif %}
-
-        <form action="{{ url_for('add_stock') }}" method="post" class="add-stock-form">
-            <input type="text" name="ticker" placeholder="Ticker (e.g., AAPL)">
-            <input type="number" name="shares" placeholder="Shares" step="0.01" min="0">
-            <button type="submit">Add Stock</button>
-        </form>
-
-        <div class="portfolio-grid">
-            {% for stock in portfolio %}
-                <div class="stock-card">
-                    <div class="stock-header">
-                        <h2>{{ stock.ticker }}</h2>
-                        <a href="{{ url_for('delete_stock', ticker=stock.ticker) }}" class="delete-btn">Remove</a>
-                    </div>
-
-                    <form action="{{ url_for('update_shares') }}" method="post" class="shares-form">
-                        <input type="hidden" name="ticker" value="{{ stock.ticker }}">
-                        <label for="shares-{{ stock.ticker }}">Shares:</label>
-                        <input type="number" id="shares-{{ stock.ticker }}" name="shares"
-                               value="{{ stock.shares }}" step="0.01" min="0" class="shares-input">
-                        <button type="submit" class="update-btn">Update</button>
-                    </form>
-
-                    <div class="position-summary">
-                        <div>
-                            <span class="label">Position Value:</span>
-                            <span class="value">${{ "{:,.2f}".format(stock.current_value) if stock.current_value else '0.00' }}</span>
-                        </div>
-                        <div>
-                            <span class="label">Price:</span>
-                            <span class="value">${{ "%.2f"|format(stock.last_price) if stock.last_price is not none else 'N/A' }}</span>
-                        </div>
-                    </div>
-
-                    <table class="gains-table">
-                        <thead>
-                            <tr>
-                                <th>Period</th>
-                                <th>Gain ($)</th>
-                                <th>Gain (%)</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {% for period in ['1D', '1W', '1M', 'YTD'] %}
-                            {% set gain = stock.gains.get(period, {}) %}
-                            <tr>
-                                <td>{{ period }}</td>
-                                <td class="{{ 'positive' if gain.gain_dollars is not none and gain.gain_dollars >= 0 else 'negative' if gain.gain_dollars is not none else '' }}">
-                                    {% if gain.gain_dollars is not none %}
-                                        {{ "+" if gain.gain_dollars >= 0 else "" }}${{ "{:,.2f}".format(gain.gain_dollars) }}
-                                    {% else %}
-                                        N/A
-                                    {% endif %}
-                                </td>
-                                <td class="{{ 'positive' if gain.gain_percent is not none and gain.gain_percent >= 0 else 'negative' if gain.gain_percent is not none else '' }}">
-                                    {% if gain.gain_percent is not none %}
-                                        {{ "+" if gain.gain_percent >= 0 else "" }}{{ "%.2f"|format(gain.gain_percent) }}%
-                                    {% else %}
-                                        N/A
-                                    {% endif %}
-                                </td>
-                            </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
-
-                    <table class="metrics-table">
-                        <tr>
-                            <th>P/E Ratio</th>
-                            <td>{{ "%.2f"|format(stock.pe_ratio) if stock.pe_ratio is not none else 'N/A' }}</td>
-                            <th>P/B Ratio</th>
-                            <td>{{ "%.2f"|format(stock.pb_ratio) if stock.pb_ratio is not none else 'N/A' }}</td>
-                        </tr>
-                    </table>
-
-                    <div class="plot-container">
-                        {{ stock.plot|safe if stock.plot else '<p>No plot data available.</p>' }}
-                    </div>
-                </div>
-            {% else %}
-                <p class="empty-message">Your portfolio is empty. Add a stock to get started.</p>
-            {% endfor %}
+{% if summary %}
+<div class="portfolio-summary">
+    <div class="summary-card total-value">
+        <div class="summary-label">Total Portfolio Value</div>
+        <div class="summary-value">${{ "{:,.2f}".format(summary.total_value) }}</div>
+    </div>
+    <div class="summary-card {{ 'positive' if summary.day_gain_dollars >= 0 else 'negative' }}">
+        <div class="summary-label">Day's Gain</div>
+        <div class="summary-value">
+            {{ "+" if summary.day_gain_dollars >= 0 else "" }}${{ "{:,.2f}".format(summary.day_gain_dollars) }}
+            <span class="summary-percent">({{ "+" if summary.day_gain_percent >= 0 else "" }}{{ "%.2f"|format(summary.day_gain_percent) }}%)</span>
         </div>
     </div>
-</body>
-</html>
+    <div class="summary-card {{ 'positive' if summary.ytd_total_gain_dollars >= 0 else 'negative' }}">
+        <div class="summary-label">YTD Total Gain</div>
+        <div class="summary-value">
+            {{ "+" if summary.ytd_total_gain_dollars >= 0 else "" }}${{ "{:,.2f}".format(summary.ytd_total_gain_dollars) }}
+            <span class="summary-percent">({{ "+" if summary.ytd_gain_percent >= 0 else "" }}{{ "%.2f"|format(summary.ytd_gain_percent) }}%)</span>
+        </div>
+    </div>
+    <div class="summary-card {{ 'positive' if summary.ytd_unrealized_gain_dollars >= 0 else 'negative' }}">
+        <div class="summary-label">YTD Unrealized</div>
+        <div class="summary-value">
+            {{ "+" if summary.ytd_unrealized_gain_dollars >= 0 else "" }}${{ "{:,.2f}".format(summary.ytd_unrealized_gain_dollars) }}
+        </div>
+    </div>
+    <div class="summary-card {{ 'positive' if summary.ytd_realized_gain_dollars >= 0 else 'negative' }}">
+        <div class="summary-label">YTD Realized</div>
+        <div class="summary-value">
+            {{ "+" if summary.ytd_realized_gain_dollars >= 0 else "" }}${{ "{:,.2f}".format(summary.ytd_realized_gain_dollars) }}
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<form action="{{ url_for('add_stock') }}" method="post" class="add-stock-form">
+    <input type="text" name="ticker" placeholder="Ticker (e.g., AAPL)">
+    <input type="number" name="shares" placeholder="Shares" step="0.01" min="0">
+    <input type="number" name="cost_basis" placeholder="Total Cost ($)" step="0.01" min="0">
+    <button type="submit">Add Stock</button>
+</form>
+
+<div class="portfolio-grid">
+    {% for stock in portfolio %}
+        <div class="stock-card">
+            <div class="stock-header">
+                <h2>{{ stock.ticker }}</h2>
+                <a href="{{ url_for('delete_stock', ticker=stock.ticker) }}" class="delete-btn">Remove</a>
+            </div>
+
+            <div class="position-forms">
+                <form action="{{ url_for('update_shares') }}" method="post" class="shares-form">
+                    <input type="hidden" name="ticker" value="{{ stock.ticker }}">
+                    <label for="shares-{{ stock.ticker }}">Shares:</label>
+                    <input type="number" id="shares-{{ stock.ticker }}" name="shares"
+                           value="{{ stock.shares }}" step="0.01" min="0" class="shares-input">
+                    <button type="submit" class="btn-sm">Update</button>
+                </form>
+                <form action="{{ url_for('update_cost_basis') }}" method="post" class="shares-form">
+                    <input type="hidden" name="ticker" value="{{ stock.ticker }}">
+                    <label for="cost-{{ stock.ticker }}">Cost Basis:</label>
+                    <input type="number" id="cost-{{ stock.ticker }}" name="cost_basis"
+                           value="{{ stock.cost_basis or 0 }}" step="0.01" min="0" class="shares-input">
+                    <button type="submit" class="btn-sm">Update</button>
+                </form>
+            </div>
+
+            <div class="position-summary">
+                <div><span class="label">Position Value:</span><span class="value">${{ "{:,.2f}".format(stock.current_value) if stock.current_value else '0.00' }}</span></div>
+                <div><span class="label">Price:</span><span class="value">${{ "%.2f"|format(stock.last_price) if stock.last_price is not none else 'N/A' }}</span></div>
+                <div><span class="label">Cost Basis:</span><span class="value">${{ "{:,.2f}".format(stock.cost_basis) if stock.cost_basis else '0.00' }}</span></div>
+                {% if stock.shares and stock.cost_basis %}
+                {% set unrealized = stock.current_value - stock.cost_basis %}
+                <div><span class="label">Unrealized:</span><span class="value {{ 'positive' if unrealized >= 0 else 'negative' }}">{{ "+" if unrealized >= 0 else "" }}${{ "{:,.2f}".format(unrealized) }}</span></div>
+                {% endif %}
+            </div>
+
+            <form action="{{ url_for('sell_stock') }}" method="post" class="sell-form">
+                <input type="hidden" name="ticker" value="{{ stock.ticker }}">
+                <label for="sale-{{ stock.ticker }}">Sale Price/Share:</label>
+                <input type="number" id="sale-{{ stock.ticker }}" name="sale_price"
+                       value="{{ stock.last_price if stock.last_price else '' }}" step="0.01" min="0" class="shares-input" required>
+                <button type="submit" class="btn-sm btn-danger">Sell Position</button>
+            </form>
+
+            <table class="gains-table">
+                <thead><tr><th>Period</th><th>Gain ($)</th><th>Gain (%)</th></tr></thead>
+                <tbody>
+                    {% for period in ['1D', '1W', '1M', 'YTD'] %}
+                    {% set gain = stock.gains.get(period, {}) %}
+                    <tr>
+                        <td>{{ period }}</td>
+                        <td class="{{ 'positive' if gain.gain_dollars is not none and gain.gain_dollars >= 0 else 'negative' if gain.gain_dollars is not none else '' }}">
+                            {% if gain.gain_dollars is not none %}{{ "+" if gain.gain_dollars >= 0 else "" }}${{ "{:,.2f}".format(gain.gain_dollars) }}{% else %}N/A{% endif %}
+                        </td>
+                        <td class="{{ 'positive' if gain.gain_percent is not none and gain.gain_percent >= 0 else 'negative' if gain.gain_percent is not none else '' }}">
+                            {% if gain.gain_percent is not none %}{{ "+" if gain.gain_percent >= 0 else "" }}{{ "%.2f"|format(gain.gain_percent) }}%{% else %}N/A{% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+
+            <table class="metrics-table">
+                <tr>
+                    <th>P/E Ratio</th>
+                    <td>{{ "%.2f"|format(stock.pe_ratio) if stock.pe_ratio is not none else 'N/A' }}</td>
+                    <th>P/B Ratio</th>
+                    <td>{{ "%.2f"|format(stock.pb_ratio) if stock.pb_ratio is not none else 'N/A' }}</td>
+                </tr>
+            </table>
+
+            <div class="plot-container">
+                {{ stock.plot|safe if stock.plot else '<p>No plot data available.</p>' }}
+            </div>
+        </div>
+    {% else %}
+        <p class="empty-message">Your portfolio is empty. Add a stock to get started.</p>
+    {% endfor %}
+</div>
+
+<!-- Risk Management Section -->
+{% if portfolio %}
+<div class="risk-section" style="margin-top: 2rem;">
+    <div class="card">
+        <div class="section-title">Portfolio Risk Overview</div>
+        <div class="risk-cards" id="riskCards">
+            <div class="metric-card risk-card"><div class="metric-label">Beta (vs SPY)</div><div class="metric-value" id="riskBeta"><span class="spinner"></span></div></div>
+            <div class="metric-card risk-card"><div class="metric-label">Sharpe Ratio</div><div class="metric-value" id="riskSharpe"><span class="spinner"></span></div></div>
+            <div class="metric-card risk-card"><div class="metric-label">Max Drawdown</div><div class="metric-value" id="riskMaxDD"><span class="spinner"></span></div></div>
+            <div class="metric-card risk-card"><div class="metric-label">Current Drawdown</div><div class="metric-value" id="riskCurDD"><span class="spinner"></span></div></div>
+        </div>
+        <div class="risk-grid">
+            <div><div class="section-title" style="font-size: 1rem;">Sector Exposure</div><div id="sectorPie"></div></div>
+            <div><div class="section-title" style="font-size: 1rem;">Correlation Matrix</div><div id="corrHeatmap"></div></div>
+        </div>
+        <div style="margin-top: 1rem;"><div class="section-title" style="font-size: 1rem;">Drawdown Over Time</div><div id="drawdownChart"></div></div>
+    </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if portfolio %}
+<script>
+    fetch('/api/portfolio/risk')
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (!data.success) {
+                document.getElementById('riskBeta').textContent = 'N/A';
+                document.getElementById('riskSharpe').textContent = 'N/A';
+                document.getElementById('riskMaxDD').textContent = 'N/A';
+                document.getElementById('riskCurDD').textContent = 'N/A';
+                return;
+            }
+
+            document.getElementById('riskBeta').textContent = data.beta !== null ? data.beta : 'N/A';
+            document.getElementById('riskSharpe').textContent = data.sharpe !== null ? data.sharpe : 'N/A';
+            document.getElementById('riskMaxDD').innerHTML = '<span class="negative">' + data.max_drawdown + '%</span>';
+            document.getElementById('riskCurDD').innerHTML = '<span class="negative">' + data.current_drawdown + '%</span>';
+
+            // Sector exposure pie
+            if (data.sector_exposure) {
+                var labels = Object.keys(data.sector_exposure);
+                var values = Object.values(data.sector_exposure);
+                Plotly.newPlot('sectorPie', [{
+                    type: 'pie', labels: labels, values: values,
+                    hole: 0.4, textinfo: 'label+percent',
+                    marker: {colors: ['#00D4AA','#FF6B6B','#4ECDC4','#FFD700','#FF69B4','#00BFFF','#9370DB','#FF8C00']},
+                }], {template: 'plotly_dark', height: 300, margin: {t: 10, b: 10, l: 10, r: 10}, showlegend: false}, {responsive: true});
+            }
+
+            // Correlation heatmap
+            if (data.correlation) {
+                var tickers = Object.keys(data.correlation);
+                var z = tickers.map(function(t) { return tickers.map(function(t2) { return data.correlation[t][t2]; }); });
+                Plotly.newPlot('corrHeatmap', [{
+                    type: 'heatmap', x: tickers, y: tickers, z: z,
+                    colorscale: 'RdYlGn', zmin: -1, zmax: 1,
+                    text: z.map(function(row) { return row.map(function(v) { return v.toFixed(2); }); }),
+                    texttemplate: '%{text}', hoverinfo: 'x+y+z',
+                }], {template: 'plotly_dark', height: 300, margin: {t: 10, b: 50, l: 60, r: 10}}, {responsive: true});
+            }
+
+            // Drawdown chart
+            if (data.drawdown_series) {
+                Plotly.newPlot('drawdownChart', [{
+                    x: data.drawdown_series.dates, y: data.drawdown_series.values,
+                    type: 'scatter', mode: 'lines', fill: 'tozeroy',
+                    fillcolor: 'rgba(220, 53, 69, 0.15)', line: {color: '#dc3545', width: 1.5},
+                    name: 'Drawdown %',
+                }], {
+                    template: 'plotly_dark', height: 250,
+                    yaxis: {title: 'Drawdown (%)', ticksuffix: '%'},
+                    margin: {t: 10, b: 40, l: 60, r: 20},
+                }, {responsive: true});
+            }
+        })
+        .catch(function(err) {
+            document.getElementById('riskBeta').textContent = 'Error';
+        });
+</script>
+{% endif %}
+{% endblock %}

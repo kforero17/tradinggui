@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}TradingGUI{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+    {% block head_extra %}{% endblock %}
+</head>
+<body>
+    <nav class="navbar">
+        <a href="{{ url_for('portfolio') }}" class="navbar-brand">TradingGUI</a>
+        <div class="navbar-links">
+            <a href="{{ url_for('portfolio') }}" class="{{ 'active' if active_page == 'portfolio' }}">Portfolio</a>
+            <a href="{{ url_for('research') }}" class="{{ 'active' if active_page == 'research' }}">Research</a>
+            <a href="{{ url_for('momentum') }}" class="{{ 'active' if active_page == 'momentum' }}">Momentum</a>
+            <a href="{{ url_for('crypto') }}" class="{{ 'active' if active_page == 'crypto' }}">Crypto</a>
+            <a href="{{ url_for('analytics') }}" class="{{ 'active' if active_page == 'analytics' }}">Analytics</a>
+            <a href="{{ url_for('risk_dashboard') }}" class="{{ 'active' if active_page == 'risk_dashboard' }}">Risk</a>
+            <a href="{{ url_for('screener') }}" class="{{ 'active' if active_page == 'screener' }}">Screener</a>
+            <a href="{{ url_for('alerts_page') }}" class="{{ 'active' if active_page == 'alerts' }}">Alerts</a>
+        </div>
+        <div class="navbar-right">
+            <a href="{{ url_for('alerts_page') }}" class="alert-badge" title="Alerts">
+                &#x1F514;
+                {% if triggered_alert_count %}
+                <span class="alert-count">{{ triggered_alert_count }}</span>
+                {% endif %}
+            </a>
+        </div>
+    </nav>
+
+    {% if triggered_alert_count %}
+    <div class="alerts-banner visible">
+        <span class="alerts-banner-text">
+            &#9888; {{ triggered_alert_count }} alert{{ 's' if triggered_alert_count != 1 }} triggered &mdash;
+            <a href="{{ url_for('alerts_page') }}">View alerts</a>
+        </span>
+    </div>
+    {% endif %}
+
+    <div class="container">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                <ul class="flashes">
+                {% for category, message in messages %}
+                    <li class="{{ category }}">{{ message }}</li>
+                {% endfor %}
+                </ul>
+            {% endif %}
+        {% endwith %}
+
+        {% block content %}{% endblock %}
+    </div>
+
+    <script src="{{ url_for('static', filename='js/utils.js') }}"></script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>
