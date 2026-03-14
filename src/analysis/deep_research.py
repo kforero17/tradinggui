@@ -43,6 +43,8 @@ class DeepResearchAnalyzer:
             )
             dividend_data = self._build_dividend(info)
 
+            financial_currency = info.get("financialCurrency", "USD")
+
             result = {
                 "company_name": info.get("longName"),
                 "ticker": ticker,
@@ -51,6 +53,7 @@ class DeepResearchAnalyzer:
                 "business_summary": info.get("longBusinessSummary"),
                 "employee_count": info.get("fullTimeEmployees"),
                 "website": info.get("website"),
+                "financial_currency": financial_currency,
                 "revenue_history": revenue_history,
                 "margin_history": margin_history,
                 "balance_sheet": balance_sheet_data,

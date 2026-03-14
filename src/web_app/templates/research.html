@@ -118,7 +118,7 @@
 </style>
 {% endblock %}
 
-{% macro fmt_number(value) %}{% if value is none %}N/A{% elif value < 0 %}{% set abs_val = value * -1 %}{% if abs_val >= 1e12 %}-${{ "%.2f"|format(abs_val / 1e12) }}T{% elif abs_val >= 1e9 %}-${{ "%.2f"|format(abs_val / 1e9) }}B{% elif abs_val >= 1e6 %}-${{ "%.2f"|format(abs_val / 1e6) }}M{% elif abs_val >= 1e3 %}-${{ "%.1f"|format(abs_val / 1e3) }}K{% else %}-${{ "%.2f"|format(abs_val) }}{% endif %}{% elif value >= 1e12 %}${{ "%.2f"|format(value / 1e12) }}T{% elif value >= 1e9 %}${{ "%.2f"|format(value / 1e9) }}B{% elif value >= 1e6 %}${{ "%.2f"|format(value / 1e6) }}M{% elif value >= 1e3 %}${{ "%.1f"|format(value / 1e3) }}K{% else %}${{ "%.2f"|format(value) }}{% endif %}{% endmacro %}
+{% macro fmt_number(value, currency='$') %}{% if value is none %}N/A{% elif value < 0 %}{% set abs_val = value * -1 %}{% if abs_val >= 1e12 %}-{{ currency }}{{ "%.2f"|format(abs_val / 1e12) }}T{% elif abs_val >= 1e9 %}-{{ currency }}{{ "%.2f"|format(abs_val / 1e9) }}B{% elif abs_val >= 1e6 %}-{{ currency }}{{ "%.2f"|format(abs_val / 1e6) }}M{% elif abs_val >= 1e3 %}-{{ currency }}{{ "%.1f"|format(abs_val / 1e3) }}K{% else %}-{{ currency }}{{ "%.2f"|format(abs_val) }}{% endif %}{% elif value >= 1e12 %}{{ currency }}{{ "%.2f"|format(value / 1e12) }}T{% elif value >= 1e9 %}{{ currency }}{{ "%.2f"|format(value / 1e9) }}B{% elif value >= 1e6 %}{{ currency }}{{ "%.2f"|format(value / 1e6) }}M{% elif value >= 1e3 %}{{ currency }}{{ "%.1f"|format(value / 1e3) }}K{% else %}{{ currency }}{{ "%.2f"|format(value) }}{% endif %}{% endmacro %}
 
 {% block content %}
 <div class="page-header"><h1>Stock Research</h1></div>
@@ -192,6 +192,8 @@
 
 {% if deep_research %}
 {% set dr = deep_research %}
+{% set fin_currency = dr.financial_currency if dr.financial_currency and dr.financial_currency != 'USD' else '$' %}
+{% if fin_currency != '$' %}{% set fin_currency = fin_currency ~ ' ' %}{% endif %}
 {% set rec = dr.analyst.recommendation | lower if dr.analyst.recommendation else '' %}
 {% if rec in ['buy', 'strong_buy', 'strongbuy'] %}
     {% set rating_cls = 'buy' %}
@@ -339,7 +341,7 @@
                 {% for row in dr.revenue_history %}
                 <tr>
                     <td>{{ row.year }}</td>
-                    <td style="text-align:right;color:var(--text-primary);font-weight:500;">{{ fmt_number(row.revenue) }}</td>
+                    <td style="text-align:right;color:var(--text-primary);font-weight:500;">{{ fmt_number(row.revenue, fin_currency) }}</td>
                     <td style="text-align:right;">
                         {% if row.growth_pct is not none %}
                         <span class="{{ 'growth-positive' if row.growth_pct >= 0 else 'growth-negative' }}">
@@ -376,15 +378,15 @@
             </div>
             <div class="metric-card">
                 <div class="mc-label">Cash &amp; Equivalents</div>
-                <div class="mc-value">{{ fmt_number(bs.cash_and_equivalents) }}</div>
+                <div class="mc-value">{{ fmt_number(bs.cash_and_equivalents, fin_currency) }}</div>
                 {% if bs.total_debt is not none %}
-                <div class="mc-sub">Debt: {{ fmt_number(bs.total_debt) }}</div>
+                <div class="mc-sub">Debt: {{ fmt_number(bs.total_debt, fin_currency) }}</div>
                 {% endif %}
             </div>
             <div class="metric-card">
                 <div class="mc-label">Net {{ 'Cash' if bs.net_cash is not none and bs.net_cash >= 0 else 'Debt' }}</div>
                 <div class="mc-value {{ 'mc-value--positive' if bs.net_cash is not none and bs.net_cash >= 0 else 'mc-value--negative' if bs.net_cash is not none else '' }}">
-                    {{ fmt_number(bs.net_cash) if bs.net_cash is not none else 'N/A' }}
+                    {{ fmt_number(bs.net_cash, fin_currency) if bs.net_cash is not none else 'N/A' }}
                 </div>
                 <div class="mc-sub">{{ 'Balance sheet positive' if bs.net_cash is not none and bs.net_cash >= 0 else 'Net leverage' if bs.net_cash is not none else '' }}</div>
             </div>
@@ -416,7 +418,7 @@
                 <tr>
                     <td>{{ row.year }}</td>
                     <td style="text-align:right;color:{{ 'var(--color-positive)' if row.fcf >= 0 else 'var(--color-negative)' }};font-weight:500;">
-                        {{ fmt_number(row.fcf) }}
+                        {{ fmt_number(row.fcf, fin_currency) }}
                     </td>
                     <td style="text-align:right;">
                         {% if row.growth_pct is not none %}
@@ -464,11 +466,11 @@
             </div>
             <div class="val-card">
                 <span class="vc-label">Market Cap</span>
-                <span class="vc-value" style="font-size:0.95rem;">{{ fmt_number(val.market_cap) }}</span>
+                <span class="vc-value" style="font-size:0.95rem;">{{ fmt_number(val.market_cap, fin_currency) }}</span>
             </div>
             <div class="val-card">
                 <span class="vc-label">Enterprise Value</span>
-                <span class="vc-value" style="font-size:0.95rem;">{{ fmt_number(val.enterprise_value) }}</span>
+                <span class="vc-value" style="font-size:0.95rem;">{{ fmt_number(val.enterprise_value, fin_currency) }}</span>
             </div>
         </div>
     </div>
