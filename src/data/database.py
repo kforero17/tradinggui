@@ -480,10 +480,12 @@ class Database:
         Args:
             ticker: Stock ticker symbol
             sale_price: Price per share at time of sale
-            year_start_price: Price per share at start of year (Jan 1) for YTD gain calculation
+            year_start_price: Price per share at start of year (Jan 1), used only for
+                positions held since before Jan 1 or without a cost basis
 
         Returns:
-            The YTD realized gain (sale_price - year_start_price) * shares
+            The YTD realized gain (sale_price - reference_price) * shares, where
+            reference_price is the purchase price for positions bought this year
         """
         session = self.Session()
         try:
@@ -503,7 +505,14 @@ class Database:
 
             cost_per_share = cost_basis / shares if shares > 0 else 0.0
 
-            reference_price = year_start_price if year_start_price else cost_per_share
+            start_of_year = datetime(datetime.utcnow().year, 1, 1)
+            bought_this_year = (
+                record.added_at is not None and record.added_at >= start_of_year
+            )
+            if cost_per_share > 0 and (bought_this_year or not year_start_price):
+                reference_price = cost_per_share
+            else:
+                reference_price = year_start_price or cost_per_share
             realized_gain = (sale_price - reference_price) * shares
 
             gain_record = RealizedGains(
@@ -522,7 +531,7 @@ class Database:
 
             logger.info(
                 f"Sold {shares} shares of {ticker} at ${sale_price:.2f}, "
-                f"YTD realized gain: ${realized_gain:.2f} (year start: ${reference_price:.2f})"
+                f"YTD realized gain: ${realized_gain:.2f} (reference price: ${reference_price:.2f})"
             )
             return realized_gain
         except Exception as e:
