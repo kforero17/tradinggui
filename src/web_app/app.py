@@ -1,5 +1,6 @@
 from typing import Optional, List, Dict, Any
 from datetime import datetime
+from enum import Enum
 import numpy as np
 import pandas as pd
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify
@@ -242,23 +243,43 @@ def create_stock_plot_json(hist_data: pd.DataFrame, ticker: str) -> Optional[str
         logger.error(f"Error creating plot JSON for {ticker}: {e}", exc_info=True)
         return None
 
-def filter_momentum_stocks(min_market_cap: float = 2e9, min_momentum_pct: float = 0.0) -> pd.DataFrame:
-    """Filter stocks based on momentum and market cap criteria."""
+class MomentumDirection(str, Enum):
+    BULLISH = "bullish"
+    BEARISH = "bearish"
+
+
+def filter_momentum_stocks(
+    min_market_cap: float = 2e9,
+    min_momentum_pct: float = 0.0,
+    direction: MomentumDirection = MomentumDirection.BULLISH,
+) -> pd.DataFrame:
+    """Filter stocks based on momentum and market cap criteria.
+
+    ``min_momentum_pct`` is the momentum strength in the chosen direction:
+    bullish keeps stocks at least that far above their 100-day MA, bearish
+    keeps stocks at least that far below it. Strongest momentum is listed first.
+    """
     try:
         df = db.get_latest_metrics()
         if df.empty:
             return df
 
+        is_bearish = direction == MomentumDirection.BEARISH
+        pct_above_ma = df['pct_above_ma_100']
+        meets_momentum = (
+            pct_above_ma <= -min_momentum_pct if is_bearish else pct_above_ma >= min_momentum_pct
+        )
+
         # Apply filters
         filtered_df = df[
             (df['market_cap'].notna()) &
             (df['market_cap'] >= min_market_cap) &
-            (df['pct_above_ma_100'].notna()) &
-            (df['pct_above_ma_100'] >= min_momentum_pct)
+            (pct_above_ma.notna()) &
+            meets_momentum
         ].copy()
 
-        # Sort by momentum percentage (descending)
-        filtered_df = filtered_df.sort_values('pct_above_ma_100', ascending=False)
+        # Sort by momentum percentage, strongest in the chosen direction first
+        filtered_df = filtered_df.sort_values('pct_above_ma_100', ascending=is_bearish)
 
         return filtered_df
     except Exception as e:
@@ -360,6 +381,14 @@ def filter_crypto_instruments(min_volume: float = 0.0) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def _parse_momentum_direction(raw_direction: Optional[str]) -> MomentumDirection:
+    """Parse the direction query param, falling back to bullish for missing or unknown values."""
+    try:
+        return MomentumDirection((raw_direction or MomentumDirection.BULLISH.value).lower())
+    except ValueError:
+        return MomentumDirection.BULLISH
+
+
 @app.route('/momentum')
 def momentum():
     """Momentum stocks page."""
@@ -367,9 +396,10 @@ def momentum():
         # Get filter parameters from query string
         min_market_cap = float(request.args.get('min_market_cap', 2e9))  # Default $2B
         min_momentum_pct = float(request.args.get('min_momentum_pct', 0.0))  # Default 0%
+        direction = _parse_momentum_direction(request.args.get('direction'))
         
         # Filter stocks
-        momentum_stocks = filter_momentum_stocks(min_market_cap, min_momentum_pct)
+        momentum_stocks = filter_momentum_stocks(min_market_cap, min_momentum_pct, direction)
         
         # Convert to list of dictionaries for template
         stocks_list = []
@@ -381,12 +411,16 @@ def momentum():
             stocks=stocks_list,
             min_market_cap=min_market_cap,
             min_momentum_pct=min_momentum_pct,
+            direction=direction.value,
             total_count=len(stocks_list)
         )
     except Exception as e:
         logger.error(f"Error loading momentum page: {e}")
         flash(f"An error occurred: {e}", "error")
-        return render_template('momentum.html', stocks=[], min_market_cap=2e9, min_momentum_pct=0.0, total_count=0)
+        return render_template(
+            'momentum.html', stocks=[], min_market_cap=2e9, min_momentum_pct=0.0,
+            direction=MomentumDirection.BULLISH.value, total_count=0
+        )
 
 @app.route('/get_stock_plot/<ticker>')
 def get_stock_plot(ticker: str):

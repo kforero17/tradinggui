@@ -6,10 +6,15 @@
 {% endblock %}
 
 {% block content %}
-<div class="page-header"><h1>Momentum Stocks</h1></div>
+{% set is_bearish = direction == 'bearish' %}
+<div class="page-header"><h1>{{ 'Bearish' if is_bearish else 'Bullish' }} Momentum Stocks</h1></div>
 
 <div class="filters-container">
     <div class="filters-row">
+        <div class="toggle-group" role="group" aria-label="Momentum direction">
+            <button type="button" class="{{ 'active' if not is_bearish }}" onclick="setDirection('bullish')">Bullish</button>
+            <button type="button" class="bearish {{ 'active' if is_bearish }}" onclick="setDirection('bearish')">Bearish</button>
+        </div>
         <div class="filter-group">
             <label for="marketCapSlider">Minimum Market Cap</label>
             <div class="slider-container">
@@ -18,7 +23,7 @@
             </div>
         </div>
         <div class="filter-group">
-            <label for="momentumSlider">Minimum % Above 100-Day MA</label>
+            <label for="momentumSlider">Minimum % {{ 'Below' if is_bearish else 'Above' }} 100-Day MA</label>
             <div class="slider-container">
                 <input type="range" id="momentumSlider" min="-20" max="50" value="{{ min_momentum_pct }}" step="1">
                 <span class="slider-value" id="momentumValue">{{ min_momentum_pct }}%</span>
@@ -29,7 +34,7 @@
 </div>
 
 <div class="text-center text-muted" style="margin-bottom: 1.5rem;">
-    Showing {{ total_count }} stocks with market cap &ge; ${{ (min_market_cap / 1e9) | round(1) }}B and momentum &ge; {{ min_momentum_pct }}%
+    Showing {{ total_count }} stocks with market cap &ge; ${{ (min_market_cap / 1e9) | round(1) }}B and {% if is_bearish %}&ge; {{ min_momentum_pct }}% below MA100{% else %}momentum &ge; {{ min_momentum_pct }}%{% endif %}
 </div>
 
 <div class="data-table">
@@ -38,8 +43,8 @@
             <tr>
                 <th>Ticker</th>
                 <th>Last Price</th>
-                <th>% Above MA100</th>
-                <th>% Above EMA100</th>
+                <th>% vs MA100</th>
+                <th>% vs EMA100</th>
                 <th>RSI (14)</th>
                 <th>Market Cap</th>
                 <th>P/E Ratio</th>
@@ -53,10 +58,10 @@
                 <tr>
                     <td class="ticker-cell" onclick="showStockPlot('{{ stock.ticker }}')">{{ stock.ticker }}</td>
                     <td>${{ "%.2f"|format(stock.last_price) if stock.last_price is not none else 'N/A' }}</td>
-                    <td class="{{ 'positive' if stock.pct_above_ma_100 and stock.pct_above_ma_100 > 0 else 'negative' }}">
+                    <td class="{{ 'positive' if stock.pct_above_ma_100 is not none and stock.pct_above_ma_100 > 0 else 'negative' }}">
                         {{ "%.2f"|format(stock.pct_above_ma_100) if stock.pct_above_ma_100 is not none else 'N/A' }}%
                     </td>
-                    <td class="{{ 'positive' if stock.pct_above_ema_100 and stock.pct_above_ema_100 > 0 else 'negative' }}">
+                    <td class="{{ 'positive' if stock.pct_above_ema_100 is not none and stock.pct_above_ema_100 > 0 else 'negative' }}">
                         {{ "%.2f"|format(stock.pct_above_ema_100) if stock.pct_above_ema_100 is not none else 'N/A' }}%
                     </td>
                     <td class="{{ 'negative' if stock.rsi_14 is not none and stock.rsi_14 >= 70 else 'positive' if stock.rsi_14 is not none and stock.rsi_14 <= 30 else '' }}">
@@ -100,6 +105,15 @@
         var url = new URL(window.location);
         url.searchParams.set('min_market_cap', marketCap);
         url.searchParams.set('min_momentum_pct', momentum);
+        url.searchParams.set('direction', '{{ direction }}');
+        window.location.href = url.toString();
+    }
+
+    function setDirection(direction) {
+        var url = new URL(window.location);
+        url.searchParams.set('min_market_cap', document.getElementById('marketCapSlider').value * 1e9);
+        url.searchParams.set('min_momentum_pct', document.getElementById('momentumSlider').value);
+        url.searchParams.set('direction', direction);
         window.location.href = url.toString();
     }
 

@@ -208,6 +208,11 @@ input[type="text"]:focus, input[type="number"]:focus, select:focus {
 .slider-container { display: flex; align-items: center; gap: 1rem; }
 input[type="range"] { flex-grow: 1; min-width: 150px; }
 .slider-value { font-weight: bold; color: var(--accent-blue); min-width: 80px; }
+.toggle-group { display: inline-flex; border: 1px solid var(--border-color); border-radius: 4px; overflow: hidden; }
+.toggle-group button { border-radius: 0; background-color: var(--bg-input); color: var(--text-muted); }
+.toggle-group button:hover { background-color: var(--bg-card-hover); }
+.toggle-group button.active { background-color: var(--accent-blue); color: white; }
+.toggle-group button.bearish.active { background-color: var(--color-negative); }
 
 /* ── Modal ──────────────────────────────────────────────────────── */
 .modal {
