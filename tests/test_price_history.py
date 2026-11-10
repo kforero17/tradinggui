@@ -298,6 +298,30 @@ def test_failed_download_is_not_marked_checked(monkeypatch, cache_dir):
     assert not (cache_dir / "_checked.json").exists()
 
 
+def test_uncached_ticker_dropped_from_chunk_is_retried(monkeypatch, cache_dir):
+    # 2026-11-10: a run out of file descriptors dropped thousands of never-cached
+    # tickers; marking them checked hid them from the next run until the next close.
+    market = {t: _bars("2026-10-01", "2026-11-10") for t in ["AAPL", "MSFT"]}
+    fake = _install(monkeypatch, market)
+    real_download = fake.download
+
+    def drops_msft(tickers, start, **kwargs):
+        return real_download(tickers, start, **kwargs).drop(columns="MSFT", level=0)
+
+    monkeypatch.setattr(price_history.yf, "download", drops_msft)
+    result = refresh_histories(["AAPL", "MSFT"])
+
+    checked = json.loads((cache_dir / "_checked.json").read_text())
+    assert "AAPL" in checked and "MSFT" not in checked
+    assert result.failed == ["MSFT"]
+
+    monkeypatch.setattr(price_history.yf, "download", real_download)
+    result = refresh_histories(["AAPL", "MSFT"])
+
+    assert fake.calls[-1] == (["MSFT"], DEFAULT_HISTORY_START)
+    assert result.failed == [] and "MSFT" in result.histories
+
+
 def test_cached_ticker_dropped_from_chunk_is_not_marked_checked(monkeypatch, cache_dir):
     market = {t: _bars("2026-10-01", "2026-11-10") for t in ["AAPL", "MSFT"]}
     _seed_cache("AAPL", market["AAPL"].loc[:"2026-11-03"])

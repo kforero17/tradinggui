@@ -52,6 +52,8 @@ SESSION_COMPLETE_AT = time(17, 0)
 # Re-fetch a few bars already in the cache so late corrections overwrite them.
 REFRESH_OVERLAP = timedelta(days=5)
 CHECKED_FILE = "_checked.json"
+# A chunk can drop hundreds of dead symbols; the warning names only the first few.
+DROPPED_LOG_LIMIT = 20
 
 _batch_rate_limiter = RateLimiter(calls_per_second=settings.BATCH_REQUESTS_PER_SECOND)
 # ticker -> (session the bars are complete through, bars)
@@ -293,8 +295,8 @@ def refresh_histories(
     calls = downloaded = 0
     resplit: list[str] = []
     done: list[str] = []
-    # Cached tickers the download dropped from an otherwise successful chunk; they
-    # aren't marked checked, so the next call asks for them again.
+    # Tickers the download dropped from an otherwise successful chunk; they aren't
+    # marked checked, so the next call asks for them again.
     dropped: list[str] = []
     for chunk, start in jobs:
         calls += 1
@@ -307,13 +309,14 @@ def refresh_histories(
             if new is not None and old is not None and _has_new_split(old, new):
                 resplit.append(ticker)
                 continue
-            if new is None and old is not None:
-                # A holiday still returns the overlap bars, so no frame is a failure.
+            if new is None:
+                # A holiday still returns the overlap bars, so no frame is a failure:
+                # a dead symbol, or a transient one such as the 2026-11-10 run that
+                # ran out of file descriptors. The skip list retires symbols that
+                # keep failing, so retrying uncached ones next call is cheap.
                 dropped.append(ticker)
                 continue
             done.append(ticker)
-            if new is None:
-                continue
             histories[ticker] = new if old is None else _merge(old, new)
             _write_cache(ticker, histories[ticker])
             downloaded += 1
@@ -342,8 +345,12 @@ def refresh_histories(
         f"dropped={len(dropped)} in {perf_counter() - started:.1f}s"
     )
     if dropped:
+        shown = ", ".join(dropped[:DROPPED_LOG_LIMIT])
+        more = len(dropped) - DROPPED_LOG_LIMIT
         logger.warning(
-            f"No bars returned for cached {', '.join(dropped)}; will retry next call"
+            f"No bars returned for {len(dropped)} tickers ({shown}"
+            + (f" and {more} more" if more > 0 else "")
+            + "); will retry next call"
         )
     return RefreshResult(histories=histories, failed=failed, downloaded=downloaded)
 

@@ -82,7 +82,7 @@ Assumptions made while planning. Append any new ones during implementation.
 60. **Excluded from the entry scan.** Skip-listed tickers are dropped from the entry scan unless they are held or on the watchlist. Tickers whose last bar is more than 10 days before the last session are dropped too.
 61. **Positions that can't be evaluated.** Holdings with no cost basis or no history still block entries in that ticker, and they are listed as "not evaluated" on Today and in the digest.
 62. **Stale holdings.** If a holding's bars are older than the last completed session after a refresh, its rows are flagged, a notification is always sent, and the CLI exits with code 3.
-63. **Cache markers.** A cached ticker is marked checked only when the download actually returned it, so a ticker dropped from a chunk is retried on the next call.
+63. **Cache markers.** A ticker, cached or not, is marked checked only when the download actually returned it, so a ticker dropped from a chunk is retried on the next call. Symbols that are really dead are retired by the skip list.
 64. **Degraded `.info` responses.** A yfinance `.info` with no `quoteType` or no usable values counts as a failure. Stored fundamentals are kept and the ticker stays due for a refetch.
 65. **Position routes without an account.** The legacy delete route and forms that omit `account` resolve the ticker's only holding account. If several accounts hold it, the action is refused. A change that matches nothing flashes a warning instead of a success message.
 66. **Pre-run backups.** Only the weekly job backs up the DB, because it writes thousands of rows; the daily job only adds one run. Eight backups (about two months of weekly runs) are kept. A failed backup stops the job instead of writing without one.
