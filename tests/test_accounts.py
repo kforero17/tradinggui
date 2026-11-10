@@ -200,3 +200,20 @@ def test_option_positions_carry_account(database):
     database.close_option_position(position_id, close_price=0.0)
     [gain] = database.get_ytd_realized_gains(account="taxable")["gains"]
     assert gain["realized_gain"] == pytest.approx(1000.0)
+
+
+def test_position_changes_report_whether_a_row_matched(database):
+    database.upsert_account("roth", equity=50_000, cash=10_000, allow_short=False)
+    database.add_portfolio_ticker("AAPL", cost_basis=1000.0, shares=10)
+
+    assert database.update_portfolio_shares("AAPL", 5, account="roth") is False
+    assert database.update_portfolio_cost_basis("AAPL", 1.0, account="roth") is False
+    assert database.delete_portfolio_ticker("AAPL", account="roth") is False
+    assert database.update_portfolio_shares("MSFT", 5) is False
+    [untouched] = database.get_portfolio_with_shares()
+    assert (untouched["shares"], untouched["cost_basis"]) == (10, 1000.0)
+
+    assert database.update_portfolio_shares("AAPL", 5) is True
+    assert database.update_portfolio_cost_basis("AAPL", 500.0) is True
+    assert database.delete_portfolio_ticker("AAPL") is True
+    assert database.get_portfolio_with_shares() == []

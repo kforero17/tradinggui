@@ -2,17 +2,24 @@
 {% block title %}Today{% endblock %}
 {% block head_extra %}
 <script src="https://cdn.plot.ly/plotly-2.26.0.min.js"></script>
+<style>
+    .today-danger {background:#3a1015; border-color:var(--color-negative); color:#ff8a95}
+    .today-stale ul {margin:.35rem 0 0; padding-left:1.25rem}
+</style>
 {% endblock %}
 {% block content %}
 <div class="page-header"><h1>Today</h1></div>
 
 <div class="today-toolbar">
     <span id="todayStatus" class="text-muted" role="status">Loading the latest run…</span>
-    <button id="recheckHoldings" type="button" class="btn-sm">Recheck holdings</button>
+    <button id="recheckHoldings" type="button" class="btn-sm"
+            title="Re-evaluates holdings and this week's watch list on fresh bars">Recheck holdings</button>
     <button id="openAccounts" type="button" class="btn-sm btn-muted">Accounts</button>
 </div>
 
+<div id="staleBarsBanner" class="today-stale today-danger" role="alert" hidden></div>
 <div id="staleWarning" class="today-stale" hidden></div>
+<div id="skippedPositions" class="today-stale" hidden></div>
 
 <div id="summaryCards" class="metrics-grid"></div>
 

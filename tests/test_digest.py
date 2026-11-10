@@ -186,6 +186,30 @@ def test_build_digest_without_report_or_run():
     assert "No exits." in digest.html and "No run stored yet." in digest.html
 
 
+def test_digest_leads_with_stale_holdings_and_lists_skipped_positions():
+    dashboard = {
+        **DASHBOARD,
+        "stale_holdings": [{"ticker": "AAPL", "last_bar": "2026-11-05"}],
+        "skipped_positions": [
+            {"account": "Roth IRA", "ticker": "NVDA", "reason": "missing cost basis"}
+        ],
+    }
+    digest = build_digest(dashboard, REPORT)
+    assert digest.summary_line == (
+        "price data stale for 1 holding – stop checks may be late; "
+        "1 exit, 1 add, 2 entries (1 new), 1 watch, 1 expired"
+    )
+    assert "Stale prices" in digest.html and "last bar 2026-11-05" in digest.html
+    assert "Not evaluated (1)" in digest.html
+    assert "NVDA</span> (Roth IRA) – missing cost basis" in digest.html
+    assert "Portfolio page" in digest.html
+    assert "Stale bars: AAPL (last 2026-11-05)" in digest.text
+    assert "Not evaluated: NVDA (Roth IRA) – missing cost basis" in digest.text
+
+    plain = build_digest(DASHBOARD, REPORT)
+    assert "Stale prices" not in plain.html and "Not evaluated" not in plain.html
+
+
 def test_text_digest_lists_order_tickets():
     text = build_digest(DASHBOARD, REPORT).text
     assert text.splitlines()[0] == "*TradingGui weekly digest*"

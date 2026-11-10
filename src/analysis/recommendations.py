@@ -398,6 +398,12 @@ def _breach_kind(message: str) -> str:
     return _UNIT_COUNT.sub("#", message)
 
 
+def _breach_count(message: str) -> float:
+    """The unit count in a breach message; infinite if it has none."""
+    found = _UNIT_COUNT.search(message)
+    return float(found.group()) if found else math.inf
+
+
 @dataclass
 class _Budget:
     """Running heat, signed units and cash as positions and entries are admitted."""
@@ -421,15 +427,24 @@ class _Budget:
         )
 
     def unit_breaches(self, ticker: str, sign: int) -> list[str]:
-        """Limit breaches the prospective unit would cause; existing unrelated ones are ignored."""
+        """Limit breaches the prospective unit would create or worsen.
+
+        A breach that already exists blocks the unit when the unit raises its
+        count (13 long units held and another long ENTER). Breaches the unit
+        doesn't touch, such as an unrelated ticker over 4 units, are ignored.
+        """
         before = {
-            _breach_kind(b)
+            _breach_kind(b): _breach_count(b)
             for b in unit_limit_breaches(self.units, self.correlations, self.config)
         }
         prospective = dict(self.units)
         prospective[ticker] = prospective.get(ticker, 0.0) + sign
         after = unit_limit_breaches(prospective, self.correlations, self.config)
-        return [b for b in after if _breach_kind(b) not in before]
+        return [
+            b
+            for b in after
+            if _breach_count(b) > before.get(_breach_kind(b), -math.inf) + 1e-9
+        ]
 
     def admit(
         self, ticker: str, sign: int, risk: float, account: str | None, value: float

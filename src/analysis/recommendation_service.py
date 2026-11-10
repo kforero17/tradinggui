@@ -15,7 +15,7 @@ from __future__ import annotations
 import math
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from time import perf_counter
 from typing import Any
 
@@ -25,8 +25,13 @@ from loguru import logger
 from ..config.settings import settings
 from ..data.broker_import import apply_splits, match_round_trips
 from ..data.database import db
-from ..data.price_history import load_cached_histories, refresh_histories
+from ..data.price_history import (
+    last_completed_session,
+    load_cached_histories,
+    refresh_histories,
+)
 from ..data.ticker_loader import TickerInfo, load_universe
+from ..jobs.metrics_refresh import MAX_BAR_AGE_DAYS
 from .recommendations import (
     ACTION_PRIORITY,
     AccountInfo,
@@ -77,6 +82,15 @@ EQUITY_SOURCE_DEFAULT = "default"
 # Jobs that don't scan the universe but re-scan the latest entries run's ENTER/WATCH list.
 RESCAN_JOBS = frozenset({"daily", "manual"})
 
+# ``skipped_positions`` reasons set before evaluation.
+SKIP_ZERO_SHARES = "zero shares"
+SKIP_NO_COST_BASIS = "missing cost basis"
+# ``extra["entry_date_source"]`` of a position row.
+ENTRY_DATE_BROKER = "broker"
+ENTRY_DATE_ADDED_AT = "added_at"
+# No broker lot and no ``added_at``: the run date stands in.
+ENTRY_DATE_RUN = "run_date"
+
 
 def turtle_config() -> TurtleConfig:
     """The configured system (``TREND_SYSTEM``: S1 or S2) sized by ``TREND_RISK_PER_UNIT`` and
@@ -113,6 +127,16 @@ class _Scan:
     above_200d: list[bool] = field(default_factory=list)
     scanned: int = 0
     missing: int = 0
+    # Left out because their last bar is older than ``oldest_bar``.
+    stale: int = 0
+
+
+@dataclass
+class _Note:
+    """``extra`` keys and reasons added to a held position's row, keyed by (account, ticker)."""
+
+    extra: dict[str, Any] = field(default_factory=dict)
+    reasons: list[str] = field(default_factory=list)
 
 
 def _chunks(items: Sequence[str], size: int) -> Iterator[list[str]]:
@@ -120,12 +144,15 @@ def _chunks(items: Sequence[str], size: int) -> Iterator[list[str]]:
         yield list(items[start : start + size])
 
 
-def _holdings(skipped: list[dict[str, str]]) -> list[_Holding]:
+def _holdings(
+    portfolio: Iterable[Mapping[str, Any]], skipped: list[dict[str, str]]
+) -> list[_Holding]:
+    """The portfolio rows that can be evaluated; the rest are logged into ``skipped``."""
     holdings: list[_Holding] = []
-    for row in db.get_portfolio_with_shares():
+    for row in portfolio:
         ticker, shares, cost = row["ticker"].upper(), row["shares"], row["cost_basis"]
         if not shares or cost <= 0:
-            reason = "zero shares" if not shares else "missing cost basis"
+            reason = SKIP_ZERO_SHARES if not shares else SKIP_NO_COST_BASIS
             logger.warning(f"Skipping {row['account']}/{ticker}: {reason}")
             skipped.append(
                 {"account": row["account"], "ticker": ticker, "reason": reason}
@@ -137,6 +164,23 @@ def _holdings(skipped: list[dict[str, str]]) -> list[_Holding]:
             )
         )
     return holdings
+
+
+def _held_directions(
+    portfolio: Iterable[Mapping[str, Any]],
+) -> dict[str, set[Direction]]:
+    """Directions each ticker is held in, over every row with shares.
+
+    Rows that can't be evaluated (no cost basis, no bars) count too, so a held
+    ticker never gets an ENTER.
+    """
+    held: dict[str, set[Direction]] = {}
+    for row in portfolio:
+        if row["shares"]:
+            held.setdefault(row["ticker"].upper(), set()).add(
+                direction_of(row["shares"])
+            )
+    return held
 
 
 def _load_histories(tickers: Iterable[str], refresh: bool) -> dict[str, pd.DataFrame]:
@@ -161,12 +205,51 @@ def _splits(ohlc: pd.DataFrame) -> list[tuple[date, float]]:
     return [(when.date(), float(ratio)) for when, ratio in splits.items()]
 
 
+def _warn_account_mismatches(
+    held: Iterable[tuple[str, str]], filled: Iterable[tuple[str, str]]
+) -> None:
+    """One warning for held (account, ticker) pairs whose symbol's fills are all under other accounts.
+
+    Broker account strings ("Individual -1234") rarely equal the portfolio's
+    account names and no mapping exists yet, so those positions fall back to
+    ``added_at`` for their entry date.
+    """
+    accounts_by_symbol: dict[str, set[str]] = {}
+    for account, symbol in filled:
+        accounts_by_symbol.setdefault(symbol, set()).add(account)
+    mismatched = [
+        f"{account}/{ticker} (fills under {', '.join(sorted(accounts_by_symbol[ticker]))})"
+        for account, ticker in sorted(set(held))
+        if ticker in accounts_by_symbol and account not in accounts_by_symbol[ticker]
+    ]
+    if mismatched:
+        logger.warning(
+            f"{len(mismatched)} held positions have broker fills only under other "
+            f"account names, so their entry dates come from added_at: "
+            f"{'; '.join(mismatched)}"
+        )
+
+
 def _broker_entry_dates(
-    holdings: Sequence[_Holding], histories: Mapping[str, pd.DataFrame]
+    holdings: Sequence[_Holding],
+    histories: Mapping[str, pd.DataFrame],
+    fill_accounts: set[tuple[str, str]],
 ) -> dict[tuple[str, str, Direction], date]:
-    """Earliest open-lot date per (account, symbol, direction) from FIFO-matched broker fills."""
+    """Earliest open-lot date per (account, symbol, direction) from FIFO-matched broker fills.
+
+    ``fill_accounts`` receives the (account, symbol) pairs of the held
+    tickers' fills, whatever the account.
+    """
     held = {(h.account, h.ticker) for h in holdings}
-    fills = [f for f in db.get_broker_fills() if (f.account, f.symbol.upper()) in held]
+    held_tickers = {t for _, t in held}
+    all_fills = db.get_broker_fills()
+    fill_accounts.update(
+        (f.account, f.symbol.upper())
+        for f in all_fills
+        if f.symbol.upper() in held_tickers
+    )
+    _warn_account_mismatches(held, fill_accounts)
+    fills = [f for f in all_fills if (f.account, f.symbol.upper()) in held]
     if not fills:
         return {}
     splits = {
@@ -186,8 +269,11 @@ def _evaluate_positions(
     config: TurtleConfig,
     now: datetime,
     skipped: list[dict[str, str]],
+    notes: dict[tuple[str, str], _Note],
 ) -> list[AccountPosition]:
-    entry_dates = _broker_entry_dates(holdings, histories)
+    """Evaluate each holding; failures go to ``skipped``, entry-date details to ``notes``."""
+    fill_accounts: set[tuple[str, str]] = set()
+    entry_dates = _broker_entry_dates(holdings, histories, fill_accounts)
     evaluated: list[AccountPosition] = []
     for h in holdings:
         ohlc = histories.get(h.ticker)
@@ -197,10 +283,23 @@ def _evaluate_positions(
                 {"account": h.account, "ticker": h.ticker, "reason": "no price history"}
             )
             continue
-        entry_date = entry_dates.get((h.account, h.ticker, h.direction)) or h.added_at
+        note = notes.setdefault((h.account, h.ticker), _Note())
+        entry_date = entry_dates.get((h.account, h.ticker, h.direction))
+        source = ENTRY_DATE_BROKER
         if entry_date is None:
-            logger.warning(f"No entry date for {h.account}/{h.ticker}; using today")
-            entry_date = now
+            why = (
+                f"no broker fills for account {h.account}"
+                if (h.account, h.ticker) not in fill_accounts
+                else f"no open broker lot for account {h.account}"
+            )
+            if h.added_at is not None:
+                entry_date, source = h.added_at, ENTRY_DATE_ADDED_AT
+                note.reasons.append(f"entry date from added_at ({why})")
+            else:
+                logger.warning(f"No entry date for {h.account}/{h.ticker}; using today")
+                entry_date, source = now, ENTRY_DATE_RUN
+                note.reasons.append(f"entry date is the run date ({why}, no added_at)")
+        note.extra["entry_date_source"] = source
         try:
             status = evaluate_position(
                 h.ticker, ohlc, h.shares, h.entry_price, entry_date, equity, config
@@ -220,11 +319,14 @@ def _scan_universe(
     config: TurtleConfig,
     directions: tuple[Direction, ...],
     refresh: bool,
+    oldest_bar: pd.Timestamp | None = None,
 ) -> _Scan:
     """Breakouts, trend features and 200-day breadth over the universe, ``ENTRY_SCAN_BATCH_SIZE`` at a time.
 
     Universe bars come from the cache (or a refresh when ``refresh``); a ticker
-    without cached bars is counted as missing, not downloaded.
+    without cached bars is counted as missing, not downloaded. A ticker whose
+    last bar is before ``oldest_bar`` (a delisted or failing ticker keeps its
+    old cache) is counted as stale and left out.
     """
     scan = _Scan()
     min_bars = config.entry_period + config.n_period
@@ -239,6 +341,10 @@ def _scan_universe(
             )
             histories.update(loaded)
         scan.missing += len(batch) - len(histories)
+        if oldest_bar is not None:
+            current = {t: h for t, h in histories.items() if h.index[-1] >= oldest_bar}
+            scan.stale += len(histories) - len(current)
+            histories = current
         usable = {t: h for t, h in histories.items() if len(h) >= min_bars}
         scan.scanned += len(usable)
         scan.signals.extend(scan_breakouts(usable, equity, config, directions))
@@ -361,6 +467,7 @@ def _rescan(
     config: TurtleConfig,
     directions: tuple[Direction, ...],
     refresh: bool,
+    oldest_bar: pd.Timestamp | None = None,
 ) -> tuple[_Scan, dict[tuple[str, Direction], TrendScore]]:
     """Re-scan only the (ticker, direction) pairs in ``targets``.
 
@@ -370,7 +477,9 @@ def _rescan(
     """
     pairs = {_target_key(r) for r in targets}
     tickers = list(dict.fromkeys(t for t, _ in pairs))
-    scan = _scan_universe(tickers, preloaded, equity, config, directions, refresh)
+    scan = _scan_universe(
+        tickers, preloaded, equity, config, directions, refresh, oldest_bar
+    )
     scan.signals = [s for s in scan.signals if (s.ticker, s.direction) in pairs]
     scan.features = {k: f for k, f in scan.features.items() if k in pairs}
     scan.above_200d = []
@@ -380,6 +489,40 @@ def _rescan(
         if r["trend_score"] is not None
     }
     return scan, scores
+
+
+def _stale_holdings(
+    tickers: Iterable[str], histories: Mapping[str, pd.DataFrame], session: date
+) -> list[dict[str, str]]:
+    """Held tickers whose last bar is before ``session``: their stop checks run on old prices."""
+    stale: list[dict[str, str]] = []
+    for ticker in tickers:
+        ohlc = histories.get(ticker)
+        if ohlc is None or ohlc.empty:
+            continue
+        last_bar = pd.Timestamp(ohlc.index[-1]).date()
+        if last_bar < session:
+            stale.append({"ticker": ticker, "last_bar": last_bar.isoformat()})
+    if stale:
+        logger.warning(
+            f"Bars for {len(stale)} holdings end before the {session} session; stop "
+            f"checks may be late: "
+            + ", ".join(f"{s['ticker']} ({s['last_bar']})" for s in stale)
+        )
+    return stale
+
+
+def _annotate_positions(
+    rows: Iterable[dict[str, Any]], notes: Mapping[tuple[str, str], _Note]
+) -> None:
+    """Merge each held position's ``notes`` into its stored row."""
+    for row in rows:
+        if is_entry_row(row):
+            continue
+        note = notes.get((row["account"], row["ticker"]))
+        if note is not None:
+            row["extra"] = {**(row["extra"] or {}), **note.extra}
+            row["reasons"] = [*row["reasons"], *note.reasons]
 
 
 def _config_json(config: TurtleConfig, **details: Any) -> dict[str, Any]:
@@ -431,7 +574,10 @@ def generate_run(
         equity, equity_source = DEFAULT_TREND_EQUITY, EQUITY_SOURCE_DEFAULT
 
     skipped: list[dict[str, str]] = []
-    holdings = _holdings(skipped)
+    portfolio = db.get_portfolio_with_shares()
+    holdings = _holdings(portfolio, skipped)
+    # From every row with shares, so a held ticker that can't be evaluated gets no ENTER.
+    held_directions = _held_directions(portfolio)
     watchlist = [t.upper() for t in db.get_watchlist()]
     benchmark = settings.REGIME_BENCHMARK.upper()
     held_tickers = list(dict.fromkeys(h.ticker for h in holdings))
@@ -439,7 +585,21 @@ def generate_run(
     histories = _load_histories([*held_tickers, *watchlist, benchmark], refresh)
     stage = lap("load_holdings_bars", stage)
 
-    positions = _evaluate_positions(holdings, histories, equity, config, now, skipped)
+    # A naive ``now`` is UTC; the session is the latest one whose bar should be cached.
+    session = last_completed_session(now.replace(tzinfo=timezone.utc))
+    oldest_bar = pd.Timestamp(session - timedelta(days=MAX_BAR_AGE_DAYS))
+    stale_holdings = _stale_holdings(held_tickers, histories, session)
+    notes: dict[tuple[str, str], _Note] = {}
+    stale_tickers = {s["ticker"]: s["last_bar"] for s in stale_holdings}
+    for h in holdings:
+        if h.ticker in stale_tickers:
+            note = notes.setdefault((h.account, h.ticker), _Note())
+            note.extra["stale_bars"] = True
+            note.reasons.append(f"bars stale (last {stale_tickers[h.ticker]})")
+
+    positions = _evaluate_positions(
+        holdings, histories, equity, config, now, skipped, notes
+    )
     stage = lap("evaluate_positions", stage)
 
     metrics = db.get_latest_metrics()
@@ -465,11 +625,17 @@ def generate_run(
                 min_price=settings.UNIVERSE_MIN_PRICE,
                 min_dollar_volume=settings.UNIVERSE_MIN_DOLLAR_VOLUME,
                 exclude_leveraged=settings.UNIVERSE_EXCLUDE_LEVERAGED_ETFS,
+                # Kept failing in the metrics job, so their metrics rows are frozen.
+                exclude=db.get_skipped_tickers()
+                - set(held_directions)
+                - set(watchlist),
             )
         )
         universe = with_required(base, held_tickers, watchlist)
         universe_size = len(universe)
-        scan = _scan_universe(universe, histories, equity, config, directions, refresh)
+        scan = _scan_universe(
+            universe, histories, equity, config, directions, refresh, oldest_bar
+        )
         stage = lap("scan_universe", stage)
     else:
         asset_types = _asset_types(metrics, {})
@@ -480,19 +646,27 @@ def generate_run(
             wanted = {d for _, d in map(_target_key, rescan_targets)}
             directions = tuple(d for d in Direction if d in wanted)
             scan, scores = _rescan(
-                rescan_targets, histories, equity, config, directions, refresh
+                rescan_targets,
+                histories,
+                equity,
+                config,
+                directions,
+                refresh,
+                oldest_bar,
             )
             universe_size = len({r["ticker"] for r in rescan_targets})
             stage = lap("rescan_entries", stage)
 
+    if scan.stale:
+        logger.warning(
+            f"Left {scan.stale} tickers out of the scan: their bars end before "
+            f"{oldest_bar.date()} ({MAX_BAR_AGE_DAYS} days before the {session} session)"
+        )
     if scores is None:
         scores = trend_scores(scan.features)
     correlations = _correlations(holdings, histories, scan.signals, scores)
     stage = lap("scores_and_correlations", stage)
 
-    held_directions: dict[str, set[Direction]] = {}
-    for h in holdings:
-        held_directions.setdefault(h.ticker, set()).add(h.direction)
     recommendations = build_recommendations(
         position_statuses=positions,
         breakout_signals=scan.signals,
@@ -517,6 +691,7 @@ def generate_run(
         include_entries=include_entries,
     )
     rows = to_rows(diffed)
+    _annotate_positions(rows, notes)
     timings["total"] = round(perf_counter() - started, 3)
     run_id = db.create_recommendation_run(
         job,
@@ -531,8 +706,10 @@ def generate_run(
             rescanned_entries=len(rescan_targets),
             scanned=scan.scanned,
             missing_histories=scan.missing,
+            stale_histories=scan.stale,
             breadth_tickers=len(scan.above_200d),
             skipped_positions=skipped,
+            stale_holdings=stale_holdings,
             expired_count=len(expired),
             timings_s=timings,
         ),
@@ -684,7 +861,10 @@ def latest_dashboard() -> dict[str, Any]:
     kept; ``summary["watch_hidden"]`` counts the rest. Expired signals compare
     each part with the run before it of the same kind. Each row and expired
     row carries its journal ``decision`` (or None), matched on
-    (``signal_key``, ``first_seen_at``).
+    (``signal_key``, ``first_seen_at``). ``skipped_positions`` lists the
+    latest run's holdings it couldn't evaluate ({account, ticker, reason});
+    ``stale_holdings`` its holdings whose bars ended before the last
+    completed session ({ticker, last_bar}).
     """
     latest = db.get_latest_run()
     if latest is None:
@@ -695,7 +875,11 @@ def latest_dashboard() -> dict[str, Any]:
             "expired": [],
             "summary": {**summary_counts([]), "watch_hidden": 0},
             "heat": None,
+            "skipped_positions": [],
+            "stale_holdings": [],
         }
+    skipped_positions = list(latest["config"].get("skipped_positions") or [])
+    stale_holdings = list(latest["config"].get("stale_holdings") or [])
 
     latest_rows = db.get_run_recommendations(latest["id"])
     positions = [r for r in latest_rows if not is_entry_row(r)]
@@ -725,7 +909,10 @@ def latest_dashboard() -> dict[str, Any]:
             for r in rows:
                 if is_entry_row(r) and r["signal_key"] in current:
                     current[r["signal_key"]] = r
-        held = {r["ticker"] for r in positions}
+        # Held positions that couldn't be evaluated still hide their ticker's entries.
+        held = {r["ticker"] for r in positions} | {
+            s["ticker"] for s in skipped_positions if s["reason"] != SKIP_ZERO_SHARES
+        }
         entries = [r for r in current.values() if r["ticker"] not in held]
         previous_entries_run = _latest_entries_run(before_id=entries_run["id"])
         if previous_entries_run is not None:
@@ -753,5 +940,10 @@ def latest_dashboard() -> dict[str, Any]:
                 "watch_hidden": watch_hidden,
             },
             "heat": heat(recommendations, latest["equity"] or 0.0, max_heat_pct),
+            "skipped_positions": [
+                {k: s.get(k) for k in ("account", "ticker", "reason")}
+                for s in skipped_positions
+            ],
+            "stale_holdings": stale_holdings,
         }
     )

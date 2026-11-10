@@ -46,6 +46,10 @@
   .blocked { color: #ff8a95; font-size: .8rem; }
   .note { color: var(--warn); font-size: .8rem; }
   .empty { color: var(--muted); font-style: italic; padding: 4px 8px; }
+  .banner { border-radius: 6px; padding: 10px 14px; margin-top: 16px; }
+  .banner-stale { background: rgba(220, 53, 69, .18); border: 1px solid var(--neg); color: #ff8a95; }
+  .banner-skipped { background: rgba(255, 193, 7, .10); border: 1px solid var(--warn); color: var(--warn); }
+  .banner ul { margin: 6px 0 0; padding-left: 20px; }
   .risk-on { color: var(--pos); } .risk-off { color: var(--neg); } .mixed { color: var(--warn); }
   footer { color: var(--muted); font-size: .75rem; margin-top: 32px; }
 </style>
@@ -71,6 +75,29 @@
     {% if entries_run and entries_run.id != run.id %} · entries from run #{{ entries_run.id }} ({{ entries_run.job }}) at {{ entries_run.run_at }} UTC{% endif %}
   </div>
   <p class="summary">{{ summary_line }}</p>
+
+  {% if stale_holdings %}
+  <div class="banner banner-stale">
+    <strong>Stale prices:</strong> {{ stale_line }}. The last price download failed, so these holdings were checked on old bars:
+    <ul>
+      {% for s in stale_holdings %}
+      <li><span class="ticker">{{ s.ticker }}</span> last bar {{ s.last_bar }}</li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  {% if skipped_positions %}
+  <div class="banner banner-skipped">
+    <strong>Not evaluated ({{ skipped_positions | length }}):</strong> no stop, exit or add was checked for these holdings.
+    Set the cost basis (and shares) on the Portfolio page.
+    <ul>
+      {% for s in skipped_positions %}
+      <li><span class="ticker">{{ s.ticker }}</span> ({{ s.account }}) – {{ s.reason }}</li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
 
   <div class="cards">
     <div class="card"><div class="label">Equity</div><div class="value">{{ heat.equity | money if heat else '–' }}</div></div>

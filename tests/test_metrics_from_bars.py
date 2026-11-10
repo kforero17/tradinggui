@@ -216,6 +216,22 @@ def test_fetch_fundamentals_returns_none_on_other_errors_and_empty_info(fake_inf
     assert calls == ["BAD", "EMPTY"]  # not retried
 
 
+@pytest.mark.parametrize(
+    "info",
+    [
+        {"trailingPegRatio": None},  # Yahoo's known degraded reply
+        {"marketCap": 3e12, "trailingPE": 30.0},  # no quoteType
+        {"quoteType": "EQUITY", "trailingPegRatio": None, "marketCap": None},
+        {"quoteType": "ETF", "trailingPE": 25.0},  # nothing an ETF maps
+    ],
+)
+def test_fetch_fundamentals_returns_none_for_degraded_info(fake_info, info):
+    infos, calls = fake_info
+    infos["AAPL"] = info
+    assert fetch_fundamentals("AAPL") is None
+    assert calls == ["AAPL"]  # not retried
+
+
 def test_get_metrics_keeps_technicals_when_fundamentals_fail(monkeypatch, fake_info):
     """Regression: a RetryError from .info used to drop the whole ticker."""
     infos, _ = fake_info

@@ -3,8 +3,9 @@
 ``run_weekly``: universe files -> metrics (bars, technicals, rotating
 fundamentals) -> alerts -> recommendations with an entry scan -> digest.
 ``run_daily``: holdings and the latest ENTER/WATCH list on refreshed bars ->
-digest, notifying only when something needs action. Both hold an exclusive
-file lock (``JOB_LOCK_PATH``) so they never overlap.
+digest, notifying only when something needs action or holdings' bars are
+stale (the stop check ran on old prices). Both hold an exclusive file lock
+(``JOB_LOCK_PATH``) so they never overlap.
 """
 
 from __future__ import annotations
@@ -27,7 +28,7 @@ from ..config.settings import settings
 from ..data.database import db
 from ..data.ticker_loader import ticker_loader
 from ..data.universe_sources import UniverseRefreshResult, refresh_universe_files
-from ..notify.digest import build_digest, send_digest, write_report
+from ..notify.digest import build_digest, send_digest, stale_line, write_report
 from .metrics_refresh import MetricsRefreshStats, refresh_metrics
 
 __all__ = [
@@ -62,13 +63,22 @@ class JobReport:
     notified: bool
     # The dashboard summary after the run (counts by action, new, blocked, ...).
     summary: dict[str, Any] = field(default_factory=dict)
+    # Holdings whose bars end before the last completed session: {ticker, last_bar}.
+    stale_holdings: list[dict[str, str]] = field(default_factory=list)
 
     def summary_line(self) -> str:
         actions = self.summary.get("by_action", {})
         counts = ", ".join(f"{a} {n}" for a, n in actions.items() if n) or "no rows"
         stages = " ".join(f"{s}={t:.1f}s" for s, t in self.stage_seconds.items())
+        stale = (
+            f"STALE bars for {len(self.stale_holdings)} holdings "
+            f"({', '.join(s['ticker'] for s in self.stale_holdings)}); "
+            if self.stale_holdings
+            else ""
+        )
         return (
-            f"{self.job} run {self.run_id}: {counts}; {self.summary.get('new', 0)} new; "
+            f"{self.job} run {self.run_id}: {stale}{counts}; "
+            f"{self.summary.get('new', 0)} new; "
             f"alerts {self.alerts_triggered}; notified {self.notified}; "
             f"stages {stages}; report {self.report_path}"
         )
@@ -229,6 +239,17 @@ def actionable_rows(run_id: int) -> list[dict]:
     ]
 
 
+def _stale_holdings(dashboard: Mapping[str, Any]) -> list[dict[str, str]]:
+    """The run's holdings on stale bars, logged as a warning when there are any."""
+    stale = list(dashboard.get("stale_holdings") or [])
+    if stale:
+        logger.warning(
+            f"{stale_line(stale)}: "
+            + ", ".join(f"{s['ticker']} (last {s['last_bar']})" for s in stale)
+        )
+    return stale
+
+
 def run_weekly(
     *,
     tickers: list[str] | None = None,
@@ -261,6 +282,7 @@ def run_weekly(
                 _report_dict("weekly", run_id, stages, metrics, universe, alerts),
             )
             report_path = write_report(digest, "weekly", datetime.now())
+            stale = _stale_holdings(dashboard)
             notified = send_digest(digest) if notify else False
         stages["total"] = round(perf_counter() - started, 3)
         return JobReport(
@@ -273,6 +295,7 @@ def run_weekly(
             report_path=report_path,
             notified=notified,
             summary=dashboard["summary"],
+            stale_holdings=stale,
         )
 
 
@@ -280,7 +303,8 @@ def run_daily(*, notify: bool = True) -> JobReport:
     """Re-evaluate holdings and the ENTER/WATCH list on refreshed bars.
 
     The report is always written; the notification goes out only when
-    ``actionable_rows`` finds something.
+    ``actionable_rows`` finds something or some holdings' bars are stale (the
+    download failed, so stops were checked on old prices).
     """
     with job_lock():
         stages: dict[str, float] = {}
@@ -294,11 +318,15 @@ def run_daily(*, notify: bool = True) -> JobReport:
                 dashboard, _report_dict("daily", run_id, stages, None, None, None)
             )
             report_path = write_report(digest, "daily", datetime.now())
+            stale = _stale_holdings(dashboard)
             notified = False
-            if not actionable:
+            if not actionable and not stale:
                 logger.info("Nothing actionable; no notification")
             elif notify:
-                logger.info(f"{len(actionable)} actionable rows; notifying")
+                logger.info(
+                    f"{len(actionable)} actionable rows, {len(stale)} holdings on "
+                    "stale bars; notifying"
+                )
                 notified = send_digest(digest)
         stages["total"] = round(perf_counter() - started, 3)
         return JobReport(
@@ -311,4 +339,5 @@ def run_daily(*, notify: bool = True) -> JobReport:
             report_path=report_path,
             notified=notified,
             summary=dashboard["summary"],
+            stale_holdings=stale,
         )

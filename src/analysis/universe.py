@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import math
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Collection, Iterable, Mapping
 
 import pandas as pd
 from loguru import logger
@@ -70,6 +70,7 @@ def liquid_universe(
     min_price: float,
     min_dollar_volume: float,
     exclude_leveraged: bool = True,
+    exclude: Collection[str] = (),
 ) -> list[str]:
     """Universe tickers whose latest metrics clear the price and dollar-volume floors.
 
@@ -77,7 +78,9 @@ def liquid_universe(
     ``avg_dollar_volume_50d``; missing or NaN values exclude it, as does a
     missing column. Tickers absent from ``universe`` (delisted since their
     metrics were stored) are dropped. With ``exclude_leveraged`` set,
-    leveraged and inverse ETFs are dropped by name. The result is ordered by
+    leveraged and inverse ETFs are dropped by name. Tickers in ``exclude``
+    (the metrics job's skip list: their metrics rows stopped updating, so the
+    stored price and volume are stale) are dropped. The result is ordered by
     dollar volume, most liquid first.
     """
     missing = [
@@ -89,8 +92,9 @@ def liquid_universe(
         )
         return []
 
+    excluded = {t.strip().upper() for t in exclude}
     liquid: list[tuple[float, str]] = []
-    leveraged = 0
+    leveraged = skip_listed = 0
     for ticker, price, dollar_volume in zip(
         metrics["ticker"], metrics[PRICE_COLUMN], metrics[DOLLAR_VOLUME_COLUMN]
     ):
@@ -103,6 +107,9 @@ def liquid_universe(
         if exclude_leveraged and info.is_etf and is_leveraged_or_inverse(info.name):
             leveraged += 1
             continue
+        if info.symbol.upper() in excluded:
+            skip_listed += 1
+            continue
         liquid.append((dollar_volume, info.symbol))
 
     liquid.sort(key=lambda item: (-item[0], item[1]))
@@ -110,7 +117,7 @@ def liquid_universe(
     logger.info(
         f"Liquid universe: {len(tickers)} of {len(metrics)} metrics rows "
         f"(price >= {min_price}, 50d $vol >= {min_dollar_volume:,.0f}, "
-        f"{leveraged} leveraged/inverse ETFs dropped)"
+        f"{leveraged} leveraged/inverse ETFs and {skip_listed} skip-listed tickers dropped)"
     )
     return tickers
 

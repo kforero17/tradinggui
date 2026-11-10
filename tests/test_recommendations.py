@@ -15,6 +15,7 @@ from src.analysis.recommendations import (
     AccountPosition,
     RecommendationAction,
     TrendScore,
+    _Budget,
     build_recommendations,
     close_above_sma,
     entry_signal_key,
@@ -240,6 +241,67 @@ def test_correlated_group_breach_is_blocked_but_unrelated_breaches_are_not():
     by = _by_ticker(recs)
     assert any("group (ρ ≥ 0.7)" in b for b in by["CCC"].blocked_by)
     assert by["XXX"].blocked_by == ()
+
+
+def test_budget_blocks_a_unit_that_worsens_an_existing_breach():
+    budget = _Budget(
+        total_equity=EQUITY,
+        heat_limit=1e9,
+        heat_used=0.0,
+        units={f"T{i:02d}": 1.0 for i in range(13)},
+        cash={},
+        correlations=pd.DataFrame(),
+        config=CONFIG,
+    )
+    assert budget.unit_breaches("NEW", 1) == ["Total long units 14.0 > 12"]
+    # A short doesn't add to the long total.
+    assert budget.unit_breaches("NEW", -1) == []
+
+
+def test_enter_is_blocked_when_long_units_are_already_over_the_limit():
+    positions = [
+        AccountPosition("taxable", _status(f"T{i:02d}", units=1.0)) for i in range(13)
+    ]
+    recs = _build(positions=positions, signals=[_signal("NEW")], max_heat_pct=1.0)
+    new = _by_ticker(recs)["NEW"]
+    assert new.action is A.ENTER
+    assert new.blocked_by == ("Total long units 14.0 > 12",)
+
+
+def test_add_unit_into_an_already_breached_correlated_group_is_blocked():
+    tickers = ["AAA", "BBB", "CCC"]
+    correlations = pd.DataFrame(0.9, index=tickers, columns=tickers)
+    for t in tickers:
+        correlations.loc[t, t] = 1.0
+    recs = _build(
+        positions=[
+            AccountPosition("taxable", _status("AAA", units=3.0)),
+            AccountPosition(
+                "taxable", _status("BBB", PositionAction.ADD_UNIT, units=2.0)
+            ),
+            AccountPosition("taxable", _status("CCC", units=2.0)),
+        ],
+        correlations=correlations,
+        max_heat_pct=1.0,
+    )
+    add = next(r for r in recs if r.action is A.ADD_UNIT)
+    assert add.ticker == "BBB"
+    # The group is at 7 > 6 already; the add would take it to 8.
+    assert any("group (ρ ≥ 0.7): 8.0 units" in b for b in add.blocked_by)
+
+
+def test_an_unrelated_existing_breach_does_not_block():
+    budget = _Budget(
+        total_equity=EQUITY,
+        heat_limit=1e9,
+        heat_used=0.0,
+        units={"ZZZ": 4.5},
+        cash={},
+        correlations=pd.DataFrame(),
+        config=CONFIG,
+    )
+    assert budget.unit_breaches("NEW", 1) == []
+    assert budget.unit_breaches("ZZZ", 1) == ["ZZZ: 5.5 units > 4 per ticker"]
 
 
 def test_unit_limits_aggregate_a_ticker_across_accounts():

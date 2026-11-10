@@ -826,8 +826,8 @@ class Database:
 
     def delete_portfolio_ticker(
         self, ticker: str, account: str = settings.DEFAULT_ACCOUNT
-    ) -> None:
-        """Delete a ticker from an account's portfolio."""
+    ) -> bool:
+        """Delete a ticker from an account's portfolio; False when it wasn't held there."""
         session = self.Session()
         try:
             record = session.get(Portfolio, (account, ticker))
@@ -835,10 +835,12 @@ class Database:
                 session.delete(record)
                 session.commit()
                 logger.info(f"Deleted {ticker} from portfolio ({account}).")
+                return True
             else:
                 logger.warning(
                     f"Ticker {ticker} not found in portfolio ({account}) for deletion."
                 )
+                return False
         except Exception as e:
             session.rollback()
             logger.error(f"Error deleting {ticker} from portfolio ({account}): {e}")
@@ -848,11 +850,11 @@ class Database:
 
     def update_portfolio_shares(
         self, ticker: str, shares: float, account: str = settings.DEFAULT_ACCOUNT
-    ) -> None:
+    ) -> bool:
         """Update the number of shares for a portfolio position.
 
-        Raises ValueError when this opens or increases a short in an account that
-        doesn't allow shorts.
+        Returns False when the account holds no such position. Raises ValueError
+        when this opens or increases a short in an account that doesn't allow shorts.
         """
         session = self.Session()
         try:
@@ -864,8 +866,10 @@ class Database:
                 record.shares = shares
                 session.commit()
                 logger.info(f"Updated {ticker} ({account}) shares to {shares}")
+                return True
             else:
                 logger.warning(f"Ticker {ticker} not found in portfolio ({account})")
+                return False
         except Exception as e:
             session.rollback()
             logger.error(f"Error updating shares for {ticker} ({account}): {e}")
@@ -954,8 +958,8 @@ class Database:
 
     def update_portfolio_cost_basis(
         self, ticker: str, cost_basis: float, account: str = settings.DEFAULT_ACCOUNT
-    ) -> None:
-        """Update the cost basis for a portfolio position."""
+    ) -> bool:
+        """Update the cost basis for a portfolio position; False when it isn't held there."""
         session = self.Session()
         try:
             record = session.get(Portfolio, (account, ticker))
@@ -965,8 +969,10 @@ class Database:
                 logger.info(
                     f"Updated {ticker} ({account}) cost basis to ${cost_basis:.2f}"
                 )
+                return True
             else:
                 logger.warning(f"Ticker {ticker} not found in portfolio ({account})")
+                return False
         except Exception as e:
             session.rollback()
             logger.error(f"Error updating cost basis for {ticker} ({account}): {e}")

@@ -4,7 +4,8 @@
     python -m src.jobs daily [--no-notify]
 
 Exit codes: 0 success, 1 error, 2 another job holds the lock (argparse also
-uses 2 for bad arguments).
+uses 2 for bad arguments), 3 completed with stale data (some holdings' bars end
+before the last completed session, so their stop checks may be late).
 """
 
 from __future__ import annotations
@@ -20,6 +21,15 @@ from .pipeline import JobAlreadyRunning, JobReport, run_daily, run_weekly
 EXIT_OK = 0
 EXIT_ERROR = 1
 EXIT_LOCKED = 2
+EXIT_STALE = 3
+
+EXIT_CODES_HELP = """exit codes:
+  0  success
+  1  error
+  2  another job holds the lock (also argparse's code for bad arguments)
+  3  completed with stale data: some holdings' bars end before the last
+     completed session, so their stop checks may be late
+"""
 
 
 def _ticker_list(value: str) -> list[str]:
@@ -38,7 +48,10 @@ def _positive_int(value: str) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="python -m src.jobs", description="TradingGui scheduled jobs"
+        prog="python -m src.jobs",
+        description="TradingGui scheduled jobs",
+        epilog=EXIT_CODES_HELP,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     commands = parser.add_subparsers(dest="command", required=True)
 
@@ -85,6 +98,12 @@ def main(argv: list[str] | None = None) -> int:
         logger.exception(f"The {args.command} job failed")
         return EXIT_ERROR
     print(report.summary_line())
+    if report.stale_holdings:
+        logger.warning(
+            f"The {args.command} job completed with stale data for "
+            f"{len(report.stale_holdings)} holdings"
+        )
+        return EXIT_STALE
     return EXIT_OK
 
 

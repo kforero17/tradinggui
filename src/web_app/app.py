@@ -745,6 +745,41 @@ def _form_account() -> str:
     return request.form.get("account", "").strip() or settings.DEFAULT_ACCOUNT
 
 
+def _holding_account(ticker: str, action: str) -> Optional[str]:
+    """The one account holding ``ticker``, for links and forms that name no account.
+
+    Flashes an error and returns None when several accounts hold it (``action``,
+    e.g. "delete", names what to do per account instead), and a warning when none does.
+    """
+    accounts = sorted(
+        {p["account"] for p in db.get_portfolio_with_shares() if p["ticker"] == ticker}
+    )
+    if len(accounts) == 1:
+        return accounts[0]
+    if accounts:
+        flash(
+            f"{ticker} is held in several accounts ({', '.join(accounts)}); "
+            f"{action} it from its account on the Portfolio page.",
+            "error",
+        )
+    else:
+        flash(f"No position {ticker} in any account.", "warning")
+    return None
+
+
+def _form_position_account(ticker: str, action: str) -> Optional[str]:
+    """The account a form posts for an existing position, else the one holding it.
+
+    Returns None, having flashed why, when the form names no account and the
+    holdings don't settle it.
+    """
+    return request.form.get("account", "").strip() or _holding_account(ticker, action)
+
+
+def _flash_no_position(ticker: str, account: str) -> None:
+    flash(f"No position {ticker} in account {account}.", "warning")
+
+
 def _account_groups(
     portfolio_metrics: List[Dict[str, Any]],
     option_metrics: List[Dict[str, Any]],
@@ -990,7 +1025,6 @@ def update_shares():
     """Update share quantity for a portfolio position; negative shares are a short."""
     ticker = request.form.get("ticker", "").upper().strip()
     shares_str = request.form.get("shares", "0")
-    account = _form_account()
 
     try:
         shares = float(shares_str)
@@ -999,8 +1033,14 @@ def update_shares():
         return redirect(url_for("portfolio"))
 
     try:
-        db.update_portfolio_shares(ticker, shares, account=account)
-        flash(f"Updated {ticker} ({account}) to {shares} shares.", "success")
+        account = _form_position_account(ticker, "update")
+        if account is None:
+            return redirect(url_for("portfolio"))
+
+        if db.update_portfolio_shares(ticker, shares, account=account):
+            flash(f"Updated {ticker} ({account}) to {shares} shares.", "success")
+        else:
+            _flash_no_position(ticker, account)
     except ValueError as e:
         flash(str(e), "error")
     except Exception as e:
@@ -1015,7 +1055,6 @@ def update_cost_basis():
     """Update cost basis for a portfolio position."""
     ticker = request.form.get("ticker", "").upper().strip()
     cost_basis_str = request.form.get("cost_basis", "0")
-    account = _form_account()
 
     try:
         cost_basis = float(cost_basis_str)
@@ -1023,10 +1062,17 @@ def update_cost_basis():
             flash("Cost basis cannot be negative.", "warning")
             return redirect(url_for("portfolio"))
 
-        db.update_portfolio_cost_basis(ticker, cost_basis, account=account)
-        flash(
-            f"Updated {ticker} ({account}) cost basis to ${cost_basis:.2f}.", "success"
-        )
+        account = _form_position_account(ticker, "update")
+        if account is None:
+            return redirect(url_for("portfolio"))
+
+        if db.update_portfolio_cost_basis(ticker, cost_basis, account=account):
+            flash(
+                f"Updated {ticker} ({account}) cost basis to ${cost_basis:.2f}.",
+                "success",
+            )
+        else:
+            _flash_no_position(ticker, account)
     except ValueError:
         flash("Invalid cost basis.", "error")
     except Exception as e:
@@ -1041,7 +1087,6 @@ def sell_stock():
     """Sell a stock from an account's portfolio and record YTD realized gain."""
     ticker = request.form.get("ticker", "").upper().strip()
     sale_price_str = request.form.get("sale_price", "")
-    account = _form_account()
 
     if not ticker:
         flash("Ticker symbol cannot be empty.", "warning")
@@ -1051,6 +1096,10 @@ def sell_stock():
         sale_price = float(sale_price_str)
         if sale_price < 0:
             flash("Sale price cannot be negative.", "warning")
+            return redirect(url_for("portfolio"))
+
+        account = _form_position_account(ticker, "sell")
+        if account is None:
             return redirect(url_for("portfolio"))
 
         hist_data = metrics_calculator._get_historical_data(ticker)
@@ -1086,8 +1135,10 @@ def sell_stock():
 def delete_stock(account: str, ticker: str):
     """Delete a stock from an account's portfolio without recording realized gain."""
     try:
-        db.delete_portfolio_ticker(ticker, account=account)
-        flash(f"{ticker} has been removed from the {account} account.", "success")
+        if db.delete_portfolio_ticker(ticker, account=account):
+            flash(f"{ticker} has been removed from the {account} account.", "success")
+        else:
+            _flash_no_position(ticker, account)
     except Exception as e:
         logger.error(f"Error deleting stock {ticker} ({account}): {e}")
         flash(f"An error occurred while removing {ticker}.", "error")
@@ -1097,8 +1148,14 @@ def delete_stock(account: str, ticker: str):
 
 @app.route("/delete_stock/<ticker>")
 def delete_stock_legacy(ticker: str):
-    """Pre-accounts delete link: removes the ticker from the default account."""
-    return delete_stock(settings.DEFAULT_ACCOUNT, ticker)
+    """Pre-accounts delete link: removes the ticker from the one account holding it.
+
+    Refused, with a flash, when several accounts hold it or none does.
+    """
+    account = _holding_account(ticker, "delete")
+    if account is None:
+        return redirect(url_for("portfolio"))
+    return delete_stock(account, ticker)
 
 
 @app.route("/add_option", methods=["POST"])
@@ -2267,7 +2324,7 @@ def api_recommendations_recheck():
     try:
         with job_lock():
             run_id = recommendation_service.generate_run(
-                "manual", include_entries=False
+                "manual", include_entries=False, refresh=True
             )
     except JobAlreadyRunning:
         logger.info("Recheck refused: a scheduled job holds the job lock")

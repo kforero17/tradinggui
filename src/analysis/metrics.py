@@ -208,6 +208,19 @@ FUNDAMENTALS_KEYS = (
     "industry",
 )
 
+# .info keys that _fundamentals_from_info maps; an ETF maps only its market cap
+_EQUITY_SOURCE_KEYS = (
+    "marketCap",
+    "trailingPE",
+    "priceToBook",
+    "enterpriseValue",
+    "ebitda",
+    "priceToSalesTrailing12Months",
+    "sector",
+    "industry",
+)
+_ETF_SOURCE_KEYS = ("marketCap",)
+
 _fundamentals_rate_limiter = RateLimiter(
     calls_per_second=settings.FUNDAMENTALS_REQUESTS_PER_SECOND
 )
@@ -270,6 +283,20 @@ def _fundamentals_from_info(ticker: str, info: dict) -> Dict[str, Any]:
     return metrics
 
 
+def _is_usable_info(info: dict | None) -> bool:
+    """Whether .info carries fundamentals, not Yahoo's degraded reply.
+
+    A throttled or partial reply such as ``{'trailingPegRatio': None}`` is a
+    non-empty dict, but it has no ``quoteType`` and none of the keys we map.
+    """
+    if not info or not info.get("quoteType"):
+        return False
+    source_keys = (
+        _ETF_SOURCE_KEYS if info["quoteType"] == "ETF" else _EQUITY_SOURCE_KEYS
+    )
+    return any(info.get(key) is not None for key in source_keys)
+
+
 def fetch_fundamentals(ticker: str) -> dict | None:
     """FUNDAMENTALS_KEYS plus ``fundamentals_updated_at`` from yfinance .info.
 
@@ -288,6 +315,12 @@ def fetch_fundamentals(ticker: str) -> dict | None:
 
     if not info:
         logger.warning(f"Could not fetch info for {ticker}")
+        return None
+    if not _is_usable_info(info):
+        # Keep the stored values and leave the ticker due rather than stamp Nones fresh.
+        logger.warning(
+            f"Ignoring degraded info for {ticker} (keys: {sorted(info)[:10]})"
+        )
         return None
     return {
         **_fundamentals_from_info(ticker, info),

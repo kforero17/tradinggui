@@ -76,3 +76,12 @@ Assumptions made while planning. Append any new ones during implementation.
 56. **Fundamentals cap.** Each run fetches fundamentals for at most `FUNDAMENTALS_MAX_PER_RUN=1000` tickers, holdings first and then the oldest. This matters because the first runs find every row stale; the 150-ticker smoke run spent 151s of its 160s metrics stage on fundamentals.
 57. **Alert failures fail loudly.** A failure while evaluating alerts now fails the run; the old `main.py` logged it and carried on. `python -m src.main` exits 1 if the job lock is held, and the `src.jobs` CLI exits 2.
 58. **Recheck takes the job lock.** "Recheck holdings" in the UI takes the same lock as the scheduled jobs and returns 409 while a job is running.
+
+### Review fixes
+59. **Unit limits that are already breached.** A breach blocks a new unit whenever the unit raises the breach's count, even if the limit was already breached before. Breaches the unit doesn't change are ignored.
+60. **Excluded from the entry scan.** Skip-listed tickers are dropped from the entry scan unless they are held or on the watchlist. Tickers whose last bar is more than 10 days before the last session are dropped too.
+61. **Positions that can't be evaluated.** Holdings with no cost basis or no history still block entries in that ticker, and they are listed as "not evaluated" on Today and in the digest.
+62. **Stale holdings.** If a holding's bars are older than the last completed session after a refresh, its rows are flagged, a notification is always sent, and the CLI exits with code 3.
+63. **Cache markers.** A cached ticker is marked checked only when the download actually returned it, so a ticker dropped from a chunk is retried on the next call.
+64. **Degraded `.info` responses.** A yfinance `.info` with no `quoteType` or no usable values counts as a failure. Stored fundamentals are kept and the ticker stays due for a refetch.
+65. **Position routes without an account.** The legacy delete route and forms that omit `account` resolve the ticker's only holding account. If several accounts hold it, the action is refused. A change that matches nothing flashes a warning instead of a success message.

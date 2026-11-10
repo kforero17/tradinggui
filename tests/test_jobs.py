@@ -1,3 +1,4 @@
+import dataclasses
 from datetime import date, datetime
 
 import pandas as pd
@@ -8,6 +9,7 @@ from src.analysis import recommendation_service as service
 from src.analysis.metrics import evaluate_alerts
 from src.config.settings import settings
 from src.data.database import Database
+from src.data.price_history import RefreshResult
 from src.data.universe_sources import UniverseRefreshResult
 from src.jobs import __main__ as cli
 from src.jobs import pipeline
@@ -465,3 +467,88 @@ def test_src_main_delegates_to_run_weekly(monkeypatch):
     with pytest.raises(SystemExit) as exc:
         legacy_main.main()
     assert exc.value.code == 1
+
+
+def _bars(count: int, end: str) -> pd.DataFrame:
+    closes = pd.Series([100.0] * count)
+    return pd.DataFrame(
+        {
+            "open": closes.values,
+            "high": closes.values + 1.0,
+            "low": closes.values - 1.0,
+            "close": closes.values,
+            "volume": 1_000_000.0,
+            "stock_splits": 0.0,
+        },
+        index=pd.bdate_range(end=end, periods=count),
+    )
+
+
+@pytest.fixture
+def stale_download(database, monkeypatch):
+    """A held AAPL whose download failed: the refresh hands back bars ending 2026-11-11."""
+    session = date(2026, 11, 13)
+    bars = _bars(300, "2026-11-11")
+    database.add_portfolio_ticker(
+        "AAPL",
+        100 * float(bars["close"].iloc[200]),
+        100,
+        account=settings.DEFAULT_ACCOUNT,
+    )
+    sent: list = []
+
+    def refresh(tickers, chunk_size=None):
+        found = {t: bars for t in tickers if t == "AAPL"}
+        return RefreshResult(found, [t for t in tickers if t not in found], 0)
+
+    def send(digest):
+        sent.append(digest)
+        return True
+
+    monkeypatch.setattr(service, "refresh_histories", refresh)
+    monkeypatch.setattr(service, "load_cached_histories", lambda tickers: {})
+    monkeypatch.setattr(service, "last_completed_session", lambda now=None: session)
+    monkeypatch.setattr(pipeline, "send_digest", send)
+    return sent
+
+
+def test_run_daily_notifies_when_holdings_bars_are_stale(stale_download):
+    report = pipeline.run_daily()
+    stale = [{"ticker": "AAPL", "last_bar": "2026-11-11"}]
+    assert report.stale_holdings == stale
+    # Nothing else is actionable (AAPL is a HOLD), but the stale data forces a notification.
+    assert report.summary["by_action"]["HOLD"] == 1
+    assert pipeline.actionable_rows(report.run_id) == []
+    assert report.notified is True and len(stale_download) == 1
+    digest = stale_download[0]
+    assert digest.summary_line.startswith(
+        "price data stale for 1 holding – stop checks may be late"
+    )
+    assert "AAPL (last 2026-11-11)" in digest.text
+    assert "Stale prices" in digest.html
+    assert "STALE bars for 1 holdings (AAPL)" in report.summary_line()
+
+
+def test_cli_exits_3_when_the_job_completed_with_stale_data(
+    stale_download, monkeypatch
+):
+    monkeypatch.setattr(cli, "setup_logging", lambda: None)
+    assert cli.main(["daily"]) == cli.EXIT_STALE == 3
+
+
+def test_cli_exits_0_without_stale_holdings(cli_stubs, monkeypatch):
+    monkeypatch.setattr(
+        cli,
+        "run_daily",
+        lambda *, notify=True: dataclasses.replace(_report("daily"), stale_holdings=[]),
+    )
+    assert cli.main(["daily"]) == cli.EXIT_OK
+    stale = [{"ticker": "AAPL", "last_bar": "2026-11-11"}]
+    monkeypatch.setattr(
+        cli,
+        "run_daily",
+        lambda *, notify=True: dataclasses.replace(
+            _report("daily"), stale_holdings=stale
+        ),
+    )
+    assert cli.main(["daily"]) == cli.EXIT_STALE

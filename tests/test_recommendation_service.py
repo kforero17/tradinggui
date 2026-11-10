@@ -3,6 +3,7 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 import pytest
+from loguru import logger
 
 from src.analysis import recommendation_service as service
 from src.config.settings import settings
@@ -52,6 +53,8 @@ HISTORIES = {
     "DWN": _bars(FLAT + [97.0]),  # breaks the 55-day low of 99
     "ILLQ": _bars(FLAT + [103.0]),  # would break out, but is illiquid
 }
+# Every fixture history ends on this bar, the last completed session in these tests.
+LAST_SESSION = HISTORIES["SPY"].index[-1].date()
 UNIVERSE = {t: TickerInfo(t, f"{t} Corp", "NYSE", t == "SPY", False) for t in HISTORIES}
 # SPY has no metrics row, so it is only the regime benchmark, not an entry candidate.
 METRICS = pd.DataFrame(
@@ -95,6 +98,9 @@ def prices(monkeypatch):
     monkeypatch.setattr(service, "load_cached_histories", load_cached)
     monkeypatch.setattr(service, "refresh_histories", refresh)
     monkeypatch.setattr(service, "load_universe", lambda: UNIVERSE)
+    monkeypatch.setattr(
+        service, "last_completed_session", lambda now=None: LAST_SESSION
+    )
     return calls
 
 
@@ -374,3 +380,118 @@ def test_turtle_config_sizes_from_settings(monkeypatch):
     monkeypatch.setattr(settings, "TREND_MAX_UNIT_FRACTION", 0.2)
     config = service.turtle_config()
     assert config.risk_per_unit == 0.01 and config.max_unit_fraction == 0.2
+
+
+@pytest.fixture
+def warnings_logged():
+    messages: list[str] = []
+    handler = logger.add(lambda m: messages.append(str(m)), level="WARNING")
+    yield messages
+    logger.remove(handler)
+
+
+def test_skip_listed_tickers_leave_the_universe_unless_held_or_watched(
+    portfolio, prices, monkeypatch
+):
+    monkeypatch.setattr(
+        portfolio, "get_skipped_tickers", lambda today=None: {"ENT", "WCH", "AAPL"}
+    )
+    run_id = service.generate_run("weekly", include_entries=True, now=FIRST_RUN)
+    rows = _rows_by_ticker(portfolio, run_id)
+    # ENT's frozen metrics row no longer qualifies it; WCH is on the watchlist and
+    # AAPL is held, so both are still evaluated.
+    assert "ENT" not in rows
+    assert rows["WCH"]["action"] == "WATCH"
+    assert rows["AAPL"]["action"] in ("HOLD", "ADD_UNIT", "EXIT_CHANNEL", "EXIT_STOP")
+    assert rows["DWN"]["action"] == "ENTER"
+
+
+def test_tickers_with_stale_bars_are_not_scanned(portfolio, prices, monkeypatch):
+    # ENT's breakout bar is 15 sessions old, more than MAX_BAR_AGE_DAYS before the session.
+    monkeypatch.setitem(HISTORIES, "ENT", _bars(FLAT[:-15] + [103.0]))
+    run_id = service.generate_run("weekly", include_entries=True, now=FIRST_RUN)
+    rows = _rows_by_ticker(portfolio, run_id)
+    assert "ENT" not in rows and rows["DWN"]["action"] == "ENTER"
+    config = portfolio.get_latest_run()["config"]
+    assert config["stale_histories"] == 1
+    assert config["stale_holdings"] == []
+
+
+def test_a_few_days_old_bars_are_still_scanned(portfolio, prices, monkeypatch):
+    # Within MAX_BAR_AGE_DAYS: a missed download, not a dead ticker.
+    monkeypatch.setitem(HISTORIES, "DWN", _bars(FLAT[:-2] + [97.0]))
+    run_id = service.generate_run("weekly", include_entries=True, now=FIRST_RUN)
+    assert _rows_by_ticker(portfolio, run_id)["DWN"]["action"] == "ENTER"
+    assert portfolio.get_latest_run()["config"]["stale_histories"] == 0
+
+
+def test_held_ticker_without_cost_basis_gets_no_enter(portfolio, prices):
+    # ENT breaks out, but it is already held: only the cost basis is missing.
+    portfolio.add_portfolio_ticker("ENT", 0.0, 10, account="Roth IRA")
+    run_id = service.generate_run("weekly", include_entries=True, now=FIRST_RUN)
+    assert "ENT" not in _rows_by_ticker(portfolio, run_id)
+
+    dashboard = service.latest_dashboard()
+    assert "ENT" not in {r["ticker"] for r in dashboard["recommendations"]}
+    assert dashboard["skipped_positions"] == [
+        {"account": "Roth IRA", "ticker": "ENT", "reason": "missing cost basis"},
+        {"account": "taxable", "ticker": "ZERO", "reason": "zero shares"},
+    ]
+
+
+def test_dashboard_hides_entries_of_held_tickers_that_were_not_evaluated(
+    portfolio, prices
+):
+    weekly_id = service.generate_run("weekly", include_entries=True, now=FIRST_RUN)
+    assert "ENT" in _rows_by_ticker(portfolio, weekly_id)
+    # Bought ENT after the weekly scan, without a cost basis yet.
+    portfolio.add_portfolio_ticker("ENT", 0.0, 10, account="Roth IRA")
+    service.generate_run("daily", include_entries=False, now=DAILY_RUN)
+    dashboard = service.latest_dashboard()
+    assert "ENT" not in {r["ticker"] for r in dashboard["recommendations"]}
+    assert {"account": "Roth IRA", "ticker": "ENT", "reason": "missing cost basis"} in (
+        dashboard["skipped_positions"]
+    )
+
+
+def test_holdings_with_old_bars_are_flagged_stale(portfolio, prices, monkeypatch):
+    # The download failed, so the refresh hands back AAPL's cache, two sessions old.
+    old_aapl = HISTORIES["AAPL"].iloc[:-2]
+    monkeypatch.setitem(HISTORIES, "AAPL", old_aapl)
+    run_id = service.generate_run(
+        "daily", include_entries=False, refresh=True, now=DAILY_RUN
+    )
+    last_bar = old_aapl.index[-1].date().isoformat()
+    config = portfolio.get_latest_run()["config"]
+    assert config["stale_holdings"] == [{"ticker": "AAPL", "last_bar": last_bar}]
+
+    rows = _rows_by_ticker(portfolio, run_id)
+    assert rows["AAPL"]["extra"]["stale_bars"] is True
+    assert f"bars stale (last {last_bar})" in rows["AAPL"]["reasons"]
+    assert "stale_bars" not in rows["XOM"]["extra"]
+
+    dashboard = service.latest_dashboard()
+    assert dashboard["stale_holdings"] == [{"ticker": "AAPL", "last_bar": last_bar}]
+
+
+def test_entry_date_source_and_account_mismatch_warning(
+    portfolio, prices, warnings_logged
+):
+    xom_day = HISTORIES["XOM"].index[ENTRY_INDEX].date()
+    # The broker's account string doesn't match the portfolio's "taxable".
+    portfolio.add_broker_fills(
+        [Fill("Individual -1234", xom_day, "XOM", Side.SELL, 50, 100.0)]
+    )
+    run_id = service.generate_run("daily", include_entries=False, now=FIRST_RUN)
+    rows = _rows_by_ticker(portfolio, run_id)
+    assert rows["AAPL"]["extra"]["entry_date_source"] == "broker"
+    assert not any("entry date" in r for r in rows["AAPL"]["reasons"])
+    assert rows["XOM"]["extra"]["entry_date_source"] == "added_at"
+    assert (
+        "entry date from added_at (no broker fills for account taxable)"
+        in rows["XOM"]["reasons"]
+    )
+    mismatch = [m for m in warnings_logged if "other account names" in m]
+    assert len(mismatch) == 1
+    assert "taxable/XOM (fills under Individual -1234)" in mismatch[0]
+    assert "AAPL" not in mismatch[0]

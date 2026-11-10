@@ -298,6 +298,33 @@ def test_failed_download_is_not_marked_checked(monkeypatch, cache_dir):
     assert not (cache_dir / "_checked.json").exists()
 
 
+def test_cached_ticker_dropped_from_chunk_is_not_marked_checked(monkeypatch, cache_dir):
+    market = {t: _bars("2026-10-01", "2026-11-10") for t in ["AAPL", "MSFT"]}
+    _seed_cache("AAPL", market["AAPL"].loc[:"2026-11-03"])
+    _seed_cache("MSFT", market["MSFT"].loc[:"2026-11-03"])
+    fake = _install(monkeypatch, market)
+    real_download = fake.download
+
+    def drops_msft(tickers, start, **kwargs):
+        # The threaded download silently leaves MSFT out of an otherwise good chunk.
+        return real_download(tickers, start, **kwargs).drop(columns="MSFT", level=0)
+
+    monkeypatch.setattr(price_history.yf, "download", drops_msft)
+    result = refresh_histories(["AAPL", "MSFT"])
+
+    checked = json.loads((cache_dir / "_checked.json").read_text())
+    assert "AAPL" in checked and "MSFT" not in checked
+    assert result.failed == [] and result.downloaded == 1
+    assert result.histories["MSFT"].index[-1] == pd.Timestamp("2026-11-03")
+
+    # The next call asks for MSFT again, and only MSFT.
+    monkeypatch.setattr(price_history.yf, "download", real_download)
+    result = refresh_histories(["AAPL", "MSFT"])
+
+    assert fake.calls[-1][0] == ["MSFT"]
+    assert result.histories["MSFT"].index[-1] == pd.Timestamp(SESSION)
+
+
 def test_layouts_other_than_ticker_first_are_handled():
     bars = _bars("2026-11-02", "2026-11-06")
     bars.index = bars.index.tz_localize("America/New_York")

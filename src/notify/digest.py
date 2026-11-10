@@ -2,7 +2,8 @@
 
 ``build_digest`` turns ``recommendation_service.latest_dashboard()`` (plus,
 optionally, a job report as a dict) into a self-contained HTML page and a
-plain-text summary. ``write_report`` saves the page under ``REPORTS_DIR``.
+plain-text summary. Holdings on stale bars lead the summary line; holdings
+that could not be evaluated are listed too. ``write_report`` saves the page under ``REPORTS_DIR``.
 Notifications (macOS ``osascript``, Slack webhook) are best-effort: a failure
 is logged and reported as False, never raised.
 """
@@ -27,6 +28,7 @@ __all__ = [
     "Digest",
     "DIGEST_WATCH_ROWS",
     "build_digest",
+    "stale_line",
     "write_report",
     "notify_macos",
     "notify_slack",
@@ -114,6 +116,14 @@ def _sections(rows: Sequence[Mapping[str, Any]]) -> dict[str, list[Mapping[str, 
     }
 
 
+def stale_line(stale_holdings: Sequence[Mapping[str, Any]]) -> str:
+    """The warning that leads a digest whose holdings' bars are behind the last session."""
+    return (
+        f"price data stale for {_plural(len(stale_holdings), 'holding')} – "
+        "stop checks may be late"
+    )
+
+
 def _summary_line(sections: Mapping[str, list], expired: int) -> str:
     entries = sections["entries"]
     new_entries = sum(1 for r in entries if r["status"] == "NEW")
@@ -158,8 +168,23 @@ def _text(
     sections: Mapping[str, list],
     regime: Mapping[str, Any],
     heat: Mapping[str, Any] | None,
+    stale_holdings: Sequence[Mapping[str, Any]] = (),
+    skipped_positions: Sequence[Mapping[str, Any]] = (),
 ) -> str:
     lines = [f"*{title}*", summary_line]
+    if stale_holdings:
+        lines.append(
+            "Stale bars: "
+            + ", ".join(f"{s['ticker']} (last {s['last_bar']})" for s in stale_holdings)
+        )
+    if skipped_positions:
+        lines.append(
+            "Not evaluated: "
+            + ", ".join(
+                f"{s['ticker']} ({s['account']}) – {s['reason']}"
+                for s in skipped_positions
+            )
+        )
     if regime:
         lines.append(f"Regime: {regime.get('label', 'unknown')}")
     if heat:
@@ -197,7 +222,11 @@ def build_digest(
     rows = list(dashboard.get("recommendations") or [])
     expired = list(dashboard.get("expired") or [])
     sections = _sections(rows)
+    stale_holdings = list(dashboard.get("stale_holdings") or [])
+    skipped_positions = list(dashboard.get("skipped_positions") or [])
     summary_line = _summary_line(sections, len(expired))
+    if stale_holdings:
+        summary_line = f"{stale_line(stale_holdings)}; {summary_line}"
     title = f"TradingGui {job} digest"
     regime = dict(run.get("regime") or {})
     heat = dashboard.get("heat")
@@ -217,10 +246,15 @@ def build_digest(
         expired=expired,
         heat=heat,
         regime=regime,
+        stale_holdings=stale_holdings,
+        skipped_positions=skipped_positions,
+        stale_line=stale_line(stale_holdings),
         report=report,
         generated_at=datetime.now().strftime("%Y-%m-%d %H:%M"),
     )
-    text = _text(title, summary_line, sections, regime, heat)
+    text = _text(
+        title, summary_line, sections, regime, heat, stale_holdings, skipped_positions
+    )
     return Digest(title=title, summary_line=summary_line, html=html, text=text)
 
 

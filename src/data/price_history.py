@@ -293,6 +293,9 @@ def refresh_histories(
     calls = downloaded = 0
     resplit: list[str] = []
     done: list[str] = []
+    # Cached tickers the download dropped from an otherwise successful chunk; they
+    # aren't marked checked, so the next call asks for them again.
+    dropped: list[str] = []
     for chunk, start in jobs:
         calls += 1
         frames = _download_chunk(chunk, start, session)
@@ -303,6 +306,10 @@ def refresh_histories(
             old = histories.get(ticker)
             if new is not None and old is not None and _has_new_split(old, new):
                 resplit.append(ticker)
+                continue
+            if new is None and old is not None:
+                # A holiday still returns the overlap bars, so no frame is a failure.
+                dropped.append(ticker)
                 continue
             done.append(ticker)
             if new is None:
@@ -318,11 +325,13 @@ def refresh_histories(
         if frames is None:
             continue
         for ticker in chunk:
+            if ticker not in frames:
+                dropped.append(ticker)
+                continue
             done.append(ticker)
-            if ticker in frames:
-                histories[ticker] = frames[ticker]
-                _write_cache(ticker, frames[ticker])
-                downloaded += 1
+            histories[ticker] = frames[ticker]
+            _write_cache(ticker, frames[ticker])
+            downloaded += 1
 
     if done:
         _record_checked(done, now)
@@ -330,8 +339,12 @@ def refresh_histories(
     logger.info(
         f"Refreshed price histories: tickers={len(requested)} stale={len(stale)} "
         f"chunks={calls} downloaded={downloaded} failed={len(failed)} "
-        f"in {perf_counter() - started:.1f}s"
+        f"dropped={len(dropped)} in {perf_counter() - started:.1f}s"
     )
+    if dropped:
+        logger.warning(
+            f"No bars returned for cached {', '.join(dropped)}; will retry next call"
+        )
     return RefreshResult(histories=histories, failed=failed, downloaded=downloaded)
 
 

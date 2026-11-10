@@ -295,7 +295,7 @@
         if (!state.dashboard || !state.dashboard.run) {
             const empty = node('div', 'card today-group');
             empty.append(node('p', 'text-muted', 'No recommendation run is stored yet. Run the weekly job, or press ' +
-                '"Recheck holdings" to evaluate your positions now.'));
+                '"Recheck holdings", which re-evaluates holdings and this week\'s watch list on fresh bars.'));
             container.append(empty);
             return;
         }
@@ -428,9 +428,53 @@
         }
     }
 
+    function renderStaleBars() {
+        const stale = (state.dashboard && state.dashboard.stale_holdings) || [];
+        const banner = el('staleBarsBanner');
+        banner.hidden = !stale.length;
+        if (!stale.length) return;
+        const list = node('ul');
+        for (const s of stale) {
+            const item = node('li');
+            item.append(node('strong', null, s.ticker), document.createTextNode(` · last bar ${s.last_bar}`));
+            list.append(item);
+        }
+        banner.replaceChildren(
+            node('strong', null, 'STALE PRICES: '),
+            document.createTextNode(`price data stale for ${stale.length} holding${stale.length === 1 ? '' : 's'} – ` +
+                'stop checks may be late. The last download failed, so these were checked on old bars. ' +
+                'Press "Recheck holdings" to try again.'),
+            list,
+        );
+    }
+
+    function renderSkippedPositions() {
+        const skipped = (state.dashboard && state.dashboard.skipped_positions) || [];
+        const card = el('skippedPositions');
+        card.hidden = !skipped.length;
+        if (!skipped.length) return;
+        const list = node('ul');
+        for (const s of skipped) {
+            const item = node('li', null, 'Not evaluated: ');
+            item.append(node('strong', null, s.ticker), document.createTextNode(` (${s.account}) – ${s.reason}`));
+            list.append(item);
+        }
+        const hint = node('div', null, 'No stop, exit or add is checked for these holdings. Set the cost basis (and shares) on the ');
+        const link = node('a', null, 'Portfolio page');
+        link.href = '/portfolio';
+        hint.append(link, document.createTextNode('.'));
+        card.replaceChildren(
+            node('strong', null, `${skipped.length} holding${skipped.length === 1 ? '' : 's'} not evaluated`),
+            list,
+            hint,
+        );
+    }
+
     function render() {
         if (!state.dashboard) return;
         const rows = state.dashboard.recommendations.filter(matches);
+        renderStaleBars();
+        renderSkippedPositions();
         renderSummary(rows);
         renderGroups(rows);
         renderExpired();
@@ -621,7 +665,7 @@
     async function recheck() {
         const b = el('recheckHoldings');
         b.disabled = true;
-        el('todayStatus').textContent = 'Rechecking holdings (downloads any stale bars)…';
+        el('todayStatus').textContent = 'Rechecking: re-evaluates holdings and this week\'s watch list on fresh bars…';
         try {
             const data = await postJson('/api/recommendations/recheck');
             await loadDashboard();
