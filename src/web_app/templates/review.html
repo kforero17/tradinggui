@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}Trade Review{% endblock %}
+{% block head_extra %}
+<script src="https://cdn.plot.ly/plotly-2.26.0.min.js"></script>
+<style>
+.review-controls {display:flex; gap:1rem; flex-wrap:wrap; align-items:end; margin-bottom:1rem}
+.review-controls label {display:flex; flex-direction:column; gap:.4rem; color:var(--text-muted)}
+.review-section {margin-bottom:2rem}
+.review-section h2 {margin-bottom:.5rem}
+.review-grid {display:grid; grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); gap:1rem}
+.data-table td, .data-table th {padding:.55rem}
+#pnlChart, #rChart {min-height:380px}
+</style>
+{% endblock %}
+{% block content %}
+<div class="page-header"><h1>Trade Review</h1></div>
+<p class="text-muted">
+    Import E*TRADE "Buys &amp; Sells" (<code>DownloadTxnHistory.csv</code>), E*TRADE trade history
+    (<code>tradesdownload.csv</code>, one account per import) and Fidelity account-history
+    (<code>Accounts_History.csv</code>) exports. Re-importing overlapping files is safe because duplicate fills are
+    skipped. Fills are FIFO-matched per account into round trips, and every trade is replayed under the Turtle rules
+    with the same shares, re-entering on later breakouts. Prices are split-adjusted.
+</p>
+
+<div class="review-controls">
+    <label>CSV exports<input id="csvFiles" type="file" accept=".csv" multiple></label>
+    <label>Account (for E*TRADE <code>tradesdownload.csv</code>, which doesn't name one)
+        <input id="importAccount" type="text" list="knownAccounts" placeholder="e.g. Roth IRA -6524"></label>
+    <datalist id="knownAccounts"></datalist>
+    <button id="importButton" type="button">Import</button>
+    <label>Replay rules<select id="system">
+        <option value="S2">System 2 · 55/20 · 2N stop</option>
+        <option value="S1">System 1 · 20/10 · 2N stop</option>
+    </select></label>
+    <button id="clearButton" type="button" class="btn-danger">Clear imported fills</button>
+</div>
+<p id="reviewStatus" class="text-muted" role="status">Loading…</p>
+
+<section class="review-section">
+    <div id="summaryCards" class="metrics-grid"></div>
+</section>
+
+<section class="review-section">
+    <h2>Discipline checks</h2>
+    <div id="disciplineCards" class="metrics-grid"></div>
+</section>
+
+<section class="review-section review-grid">
+    <div class="chart-container"><h2>Actual vs Turtle-rule P&amp;L per trade</h2><div id="pnlChart"></div></div>
+    <div class="chart-container"><h2>R-multiples (P&amp;L ÷ 2N risk)</h2><div id="rChart"></div></div>
+</section>
+
+<section class="review-section review-grid">
+    <div><h2>By entry type</h2><div class="data-table"><table><thead><tr><th>Entry</th><th>Trades</th><th>Win rate</th><th>P&amp;L</th></tr></thead><tbody id="byEntry"></tbody></table></div></div>
+    <div><h2>By account</h2><div class="data-table"><table><thead><tr><th>Account</th><th>Trades</th><th>Win rate</th><th>P&amp;L</th></tr></thead><tbody id="byAccount"></tbody></table></div></div>
+    <div><h2>By exit year</h2><div class="data-table"><table><thead><tr><th>Year</th><th>Trades</th><th>Win rate</th><th>P&amp;L</th></tr></thead><tbody id="byYear"></tbody></table></div></div>
+</section>
+
+<section class="review-section">
+    <h2>Trades</h2>
+    <div class="data-table"><table>
+        <thead><tr><th>Symbol</th><th>Account</th><th>Entry</th><th>Exit</th><th>Days</th><th>Entry px</th><th>Exit px</th>
+            <th>P&amp;L</th><th>Return</th><th>R</th><th>Worst (MAE)</th><th>Best (MFE)</th><th>Entry type</th>
+            <th>Rule first exit</th><th>Rule P&amp;L</th><th>Rule − actual</th></tr></thead>
+        <tbody id="tradeRows"></tbody>
+    </table></div>
+</section>
+
+<section class="review-section review-grid">
+    <div><h2>Re-bought higher soon after selling</h2><ul id="reentries"></ul></div>
+    <div><h2>Sells with no opening fill (older lots)</h2>
+        <p class="text-muted">Import earlier exports to give these a cost basis. Until then they are left out of the stats above.</p>
+        <ul id="unmatched"></ul></div>
+    <div><h2>Still open</h2><ul id="openPositions"></ul></div>
+</section>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='js/review.js') }}"></script>{% endblock %}

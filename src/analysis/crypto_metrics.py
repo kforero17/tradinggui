@@ -105,12 +105,12 @@ class CryptoMetricsCalculator:
         }
 
         if trend_metrics:
-            metrics['ma_20'] = trend_metrics.get(f'ma_{self.ma_period}')
-            metrics['ema_20'] = trend_metrics.get(f'ema_{self.ma_period}')
-            metrics['pct_above_ma_20'] = trend_metrics.get(f'pct_above_ma_{self.ma_period}')
-            metrics['pct_above_ema_20'] = trend_metrics.get(f'pct_above_ema_{self.ma_period}')
+            metrics['ma_50'] = trend_metrics.get(f'ma_{self.ma_period}')
+            metrics['ema_50'] = trend_metrics.get(f'ema_{self.ma_period}')
+            metrics['pct_above_ma_50'] = trend_metrics.get(f'pct_above_ma_{self.ma_period}')
+            metrics['pct_above_ema_50'] = trend_metrics.get(f'pct_above_ema_{self.ma_period}')
 
-        logger.info(f"Calculated metrics for {instrument}: price={metrics.get('last_price')}, ma_20={metrics.get('ma_20')}")
+        logger.info(f"Calculated metrics for {instrument}: price={metrics.get('last_price')}, ma_50={metrics.get('ma_50')}")
         return metrics
 
     def candlestick_to_dataframe(self, candlestick_data: list[dict]) -> pd.DataFrame:

@@ -7,7 +7,7 @@ from pathlib import Path
 from .config.settings import settings
 from .data.ticker_loader import ticker_loader
 from .data.database import db
-from .analysis.metrics import metrics_calculator
+from .analysis.metrics import metrics_calculator, evaluate_alerts
 
 def setup_logging():
     """Configure logging."""
@@ -114,6 +114,27 @@ def main():
             logger.info(f"⚡ Processing batch {batch_num}/{total_batches} ({len(batch)} tickers)")
             process_tickers_batch(batch)
         
+        # Evaluate alerts against latest metrics
+        logger.info("🔔 Evaluating alert rules...")
+        try:
+            active_alerts = db.get_active_alerts()
+            if active_alerts:
+                all_triggered = []
+                latest_df = db.get_latest_metrics()
+                for _, row in latest_df.iterrows():
+                    metrics_dict = row.to_dict()
+                    triggered = evaluate_alerts(metrics_dict, active_alerts)
+                    all_triggered.extend(triggered)
+                if all_triggered:
+                    db.mark_alerts_triggered(all_triggered)
+                    logger.info(f"🔔 {len(all_triggered)} alerts triggered!")
+                else:
+                    logger.info("🔔 No alerts triggered.")
+            else:
+                logger.info("🔔 No active alerts configured.")
+        except Exception as e:
+            logger.error(f"Error evaluating alerts: {e}")
+
         # Display final summary
         logger.info("📊 Displaying database summary:")
         display_database_summary()

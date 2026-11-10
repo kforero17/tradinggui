@@ -33,5 +33,11 @@ ENV/
 
 # Project specific
 data/processed/*.db
+data/cache/ohlc/
 .env
-*.log 
+*.log
+data/processed/*.db-wal
+data/processed/*.db-shm
+data/processed/*.db-journal
+data/reports/
+data/.job.lock

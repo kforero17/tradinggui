@@ -1,0 +1,350 @@
+{% extends "base.html" %}
+{% block title %}Quantitative Screener{% endblock %}
+
+{% block head_extra %}
+<script src="https://cdn.plot.ly/plotly-2.26.0.min.js"></script>
+<style>
+    .screener-header { text-align: center; padding: 1.5rem 0 0.5rem; }
+    .screener-header h1 { margin: 0; font-size: 1.8rem; color: var(--text-heading); }
+    .screener-meta { color: var(--text-muted); font-size: 0.95rem; margin-top: 0.25rem; }
+    .empty-state { text-align: center; padding: 4rem 2rem; }
+    .empty-state p { color: var(--text-muted); font-size: 1.1rem; margin-bottom: 1.5rem; }
+    .run-btn { background-color: var(--accent-green); color: #121212; font-size: 1rem; font-weight: bold; padding: 0.85rem 2rem; border-radius: 6px; border: none; cursor: pointer; transition: opacity 0.15s; }
+    .run-btn:hover { opacity: 0.85; background-color: var(--accent-green); }
+    .run-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .run-status { display: inline-flex; align-items: center; gap: 0.5rem; margin-left: 1rem; color: var(--text-muted); font-size: 0.9rem; }
+    .run-status .spinner { width: 18px; height: 18px; }
+    .summary-row { display: flex; gap: 1rem; flex-wrap: wrap; justify-content: center; margin: 1.5rem 0; }
+    .section-title { color: var(--text-heading); font-size: 1.1rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem; margin-bottom: 1rem; }
+    .screener-section { margin-top: 2rem; }
+    .screener-table { width: 100%; border-collapse: collapse; }
+    .screener-table th, .screener-table td { padding: 0.6rem 0.8rem; border-bottom: 1px solid var(--border-color); text-align: left; font-size: 0.9rem; }
+    .screener-table th { color: var(--text-muted); font-weight: normal; font-size: 0.85rem; background-color: var(--bg-header); }
+    .screener-table tr:hover { background-color: var(--bg-card-hover); cursor: pointer; }
+    .score-badge { display: inline-flex; width: 40px; height: 40px; border-radius: 50%; align-items: center; justify-content: center; font-weight: bold; color: white; font-size: 0.85rem; }
+    .score-green { background-color: var(--color-positive); }
+    .score-yellow { background-color: var(--color-warning); color: #121212; }
+    .score-red { background-color: var(--color-negative); }
+    .factor-bar { display: flex; height: 8px; border-radius: 4px; overflow: hidden; width: 200px; }
+    .factor-bar > div { height: 100%; }
+    .charts-row { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+    .weak-tag { display: inline-block; padding: 0.2rem 0.6rem; border-radius: 12px; font-size: 0.8rem; background-color: rgba(220, 53, 69, 0.15); color: var(--color-negative); font-weight: bold; text-transform: capitalize; }
+    .subfactor-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 0.75rem; margin-top: 1rem; }
+    .subfactor-family { margin-bottom: 1rem; }
+    .subfactor-family-title { font-weight: bold; color: var(--text-heading); font-size: 0.95rem; margin-bottom: 0.5rem; border-left: 3px solid var(--accent-green); padding-left: 0.5rem; }
+    .subfactor-item { display: flex; justify-content: space-between; padding: 0.3rem 0; font-size: 0.85rem; border-bottom: 1px solid var(--border-color); }
+    .subfactor-item span:first-child { color: var(--text-muted); }
+    .subfactor-item span:last-child { font-weight: bold; }
+    @media (max-width: 768px) { .charts-row { grid-template-columns: 1fr; } .factor-bar { width: 120px; } .summary-row { flex-direction: column; align-items: stretch; } }
+</style>
+{% endblock %}
+
+{% block content %}
+{% macro mktcap(value) -%}
+{%- if value is none %}N/A{% elif value >= 1000000000000 %}${{ "%.1f"|format(value / 1000000000000) }}T{% elif value >= 1000000000 %}${{ "%.1f"|format(value / 1000000000) }}B{% elif value >= 1000000 %}${{ "%.0f"|format(value / 1000000) }}M{% else %}${{ value }}{% endif -%}
+{%- endmacro %}
+
+<!-- Header -->
+<div class="screener-header">
+    <h1>Quantitative Screening Report</h1>
+    {% if results %}
+    <div class="screener-meta">
+        Screened {{ results.metadata.screened_at }} &mdash;
+        {{ results.metadata.universe_size }} stocks evaluated, {{ results.metadata.candidates }} candidates
+    </div>
+    {% else %}
+    <div class="screener-meta">Multi-factor quantitative equity screener</div>
+    {% endif %}
+</div>
+
+<!-- Run / Refresh Button -->
+<div style="text-align: center; margin-bottom: 1rem;">
+    <button class="run-btn" id="runBtn" onclick="runScreener()">
+        {% if results %}Refresh Screen{% else %}Run Screener{% endif %}
+    </button>
+    <span class="run-status" id="runStatus" style="display: none;">
+        <span class="spinner"></span> <span id="runStatusText">Running screen...</span>
+    </span>
+</div>
+
+{% if results is none %}
+<div class="card empty-state">
+    <p>No screening results yet. Click the button above to run the quantitative screener across the full equity universe.</p>
+</div>
+{% else %}
+<!-- Executive Summary -->
+<div class="card screener-section">
+    <div class="section-title">Executive Summary</div>
+    <div class="summary-row">
+        <div class="metric-card"><div class="metric-label">Highest Score</div><div class="metric-value positive">{{ "%.1f"|format(results.top_10[0].composite_score) }}</div></div>
+        {% set avg_score = results.top_10 | map(attribute='composite_score') | list | sum / results.top_10 | length %}
+        <div class="metric-card"><div class="metric-label">Avg Top-10 Score</div><div class="metric-value">{{ "%.1f"|format(avg_score) }}</div></div>
+        <div class="metric-card"><div class="metric-label">Universe Size</div><div class="metric-value">{{ results.metadata.universe_size }}</div></div>
+        <div class="metric-card"><div class="metric-label">Candidates</div><div class="metric-value">{{ results.metadata.candidates }}</div></div>
+    </div>
+    <div id="distributionChart" style="height: 220px;"></div>
+</div>
+
+<!-- Top 10 Picks -->
+<div class="card screener-section">
+    <div class="section-title">Top 10 Picks</div>
+    <div style="overflow-x: auto;">
+        <table class="screener-table" id="topTable">
+            <thead>
+                <tr>
+                    <th>Rank</th>
+                    <th>Ticker</th>
+                    <th>Sector</th>
+                    <th>Score</th>
+                    <th>Factor Breakdown</th>
+                    <th>P/E</th>
+                    <th>ROE</th>
+                    <th>Mkt Cap</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for stock in results.top_10 %}
+                <tr onclick="showStockDetail('{{ stock.ticker }}')">
+                    <td>{{ stock.rank }}</td>
+                    <td class="ticker-cell">{{ stock.ticker }}</td>
+                    <td>{{ stock.sector }}</td>
+                    <td>
+                        {% if stock.composite_score >= 75 %}
+                        <span class="score-badge score-green">{{ "%.0f"|format(stock.composite_score) }}</span>
+                        {% elif stock.composite_score >= 50 %}
+                        <span class="score-badge score-yellow">{{ "%.0f"|format(stock.composite_score) }}</span>
+                        {% else %}
+                        <span class="score-badge score-red">{{ "%.0f"|format(stock.composite_score) }}</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% set fs = stock.factor_scores %}
+                        {% set total = fs.value + fs.quality + fs.momentum + fs.growth + fs.sentiment %}
+                        <div class="factor-bar" title="V:{{ fs.value }} Q:{{ fs.quality }} M:{{ fs.momentum }} G:{{ fs.growth }} S:{{ fs.sentiment }}">
+                            <div style="width:{{ (fs.value / total * 100)|round(1) }}%; background:#4ECDC4;"></div>
+                            <div style="width:{{ (fs.quality / total * 100)|round(1) }}%; background:#00D4AA;"></div>
+                            <div style="width:{{ (fs.momentum / total * 100)|round(1) }}%; background:#FFD700;"></div>
+                            <div style="width:{{ (fs.growth / total * 100)|round(1) }}%; background:#FF69B4;"></div>
+                            <div style="width:{{ (fs.sentiment / total * 100)|round(1) }}%; background:#00BFFF;"></div>
+                        </div>
+                    </td>
+                    <td>{{ "%.1f"|format(stock.pe_ratio) if stock.pe_ratio else "N/A" }}</td>
+                    <td>{{ "%.1f"|format(stock.roe) ~ "%" if stock.roe else "N/A" }}</td>
+                    <td>{{ mktcap(stock.market_cap) }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Charts Row -->
+<div class="charts-row screener-section">
+    <div class="card">
+        <div class="section-title">Sector Distribution</div>
+        <div id="sectorDonut" style="height: 300px;"></div>
+    </div>
+    <div class="card">
+        <div class="section-title">Backtest: Picks vs SPY</div>
+        <div id="backtestChart" style="height: 300px;"></div>
+    </div>
+</div>
+
+<!-- Watchlist -->
+<div class="card screener-section">
+    <div class="section-title">Watchlist (Next 10 Candidates)</div>
+    <div style="overflow-x: auto;">
+        <table class="screener-table">
+            <thead>
+                <tr>
+                    <th>Rank</th>
+                    <th>Ticker</th>
+                    <th>Sector</th>
+                    <th>Score</th>
+                    <th>Factor Scores</th>
+                    <th>Weakest Factor</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for stock in results.watchlist %}
+                <tr onclick="showStockDetail('{{ stock.ticker }}')">
+                    <td>{{ stock.rank }}</td>
+                    <td class="ticker-cell">{{ stock.ticker }}</td>
+                    <td>{{ stock.sector }}</td>
+                    <td>
+                        {% if stock.composite_score >= 75 %}
+                        <span class="score-badge score-green">{{ "%.0f"|format(stock.composite_score) }}</span>
+                        {% elif stock.composite_score >= 50 %}
+                        <span class="score-badge score-yellow">{{ "%.0f"|format(stock.composite_score) }}</span>
+                        {% else %}
+                        <span class="score-badge score-red">{{ "%.0f"|format(stock.composite_score) }}</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% set fs = stock.factor_scores %}
+                        <span style="font-size:0.8rem; color:var(--text-muted);">
+                            V:{{ fs.value }} Q:{{ fs.quality }} M:{{ fs.momentum }} G:{{ fs.growth }} S:{{ fs.sentiment }}
+                        </span>
+                    </td>
+                    <td><span class="weak-tag">{{ stock.weakest_factor }}</span></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Stock Detail Modal -->
+<div class="modal" id="stockDetailModal">
+    <div class="modal-content">
+        <span class="close" onclick="closeModal('stockDetailModal')">&times;</span>
+        <h2 class="modal-title" id="modalTitle">Stock Detail</h2>
+        <div id="radarChart" style="height: 320px;"></div>
+        <div class="section-title" style="margin-top: 1.5rem;">Sub-Factor Scores</div>
+        <div id="subFactorGrid"></div>
+    </div>
+</div>
+
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Run screener - available in both empty and populated states
+function runScreener() {
+    var btn = document.getElementById('runBtn');
+    var status = document.getElementById('runStatus');
+    var statusText = document.getElementById('runStatusText');
+    btn.disabled = true;
+    status.style.display = 'inline-flex';
+    statusText.textContent = 'Running screen... this may take a few minutes';
+
+    fetch('/api/screener/run', {method: 'POST'})
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+            if (d.success) {
+                statusText.textContent = 'Complete. Reloading...';
+                window.location.reload();
+            } else {
+                statusText.textContent = 'Error: ' + (d.error || 'Unknown error');
+                btn.disabled = false;
+            }
+        })
+        .catch(function(err) {
+            statusText.textContent = 'Failed: ' + err.message;
+            btn.disabled = false;
+        });
+}
+
+{% if results %}
+(function() {
+    var data = {{ results | tojson }};
+    var CHART_CONFIG = {responsive: true};
+    var DARK_LAYOUT = {
+        template: 'plotly_dark',
+        paper_bgcolor: 'rgba(0,0,0,0)',
+        plot_bgcolor: 'rgba(0,0,0,0)',
+        font: {color: '#e0e0e0'},
+        margin: {t: 20, b: 60, l: 60, r: 20}
+    };
+    var FACTOR_COLORS = {value: '#4ECDC4', quality: '#00D4AA', momentum: '#FFD700', growth: '#FF69B4', sentiment: '#00BFFF'};
+
+    // Score distribution
+    (function() {
+        if (!data.score_distribution || data.score_distribution.length === 0) return;
+        Plotly.newPlot('distributionChart', [{
+            type: 'histogram', x: data.score_distribution,
+            marker: {color: '#4ECDC4', line: {color: '#333', width: 1}},
+            nbinsx: 20, hovertemplate: 'Score %{x:.0f}: %{y} stocks<extra></extra>'
+        }], Object.assign({}, DARK_LAYOUT, {
+            height: 220, xaxis: {title: 'Composite Score'}, yaxis: {title: 'Count'},
+            margin: {t: 10, b: 50, l: 50, r: 20}
+        }), CHART_CONFIG);
+    })();
+
+    // Sector donut
+    (function() {
+        var sectors = data.sector_distribution;
+        var labels = Object.keys(sectors);
+        var values = labels.map(function(s) { return sectors[s]; });
+        Plotly.newPlot('sectorDonut', [{
+            type: 'pie', labels: labels, values: values, hole: 0.4,
+            textinfo: 'label+value',
+            marker: {colors: ['#00D4AA','#FF6B6B','#4ECDC4','#FFD700','#FF69B4','#00BFFF','#9370DB','#FF8C00','#32CD32','#FF4500']},
+            hovertemplate: '%{label}: %{value} picks<extra></extra>'
+        }], Object.assign({}, DARK_LAYOUT, {
+            height: 300, margin: {t: 10, b: 10, l: 10, r: 10}, showlegend: false
+        }), CHART_CONFIG);
+    })();
+
+    // Backtest bars
+    (function() {
+        var bt = data.backtest;
+        Plotly.newPlot('backtestChart', [
+            {type: 'bar', name: 'Picks', x: ['6-Month', '12-Month'], y: [bt.picks_6mo_avg, bt.picks_12mo_avg], marker: {color: '#00D4AA'}, hovertemplate: '%{y:.1f}%<extra></extra>'},
+            {type: 'bar', name: 'SPY', x: ['6-Month', '12-Month'], y: [bt.spy_6mo, bt.spy_12mo], marker: {color: '#FF6B6B'}, hovertemplate: '%{y:.1f}%<extra></extra>'}
+        ], Object.assign({}, DARK_LAYOUT, {
+            height: 300, barmode: 'group',
+            yaxis: {title: 'Return (%)', ticksuffix: '%'},
+            legend: {orientation: 'h', y: -0.2}
+        }), CHART_CONFIG);
+    })();
+
+    // Stock detail modal
+    window.showStockDetail = function(ticker) {
+        document.getElementById('modalTitle').textContent = ticker + ' -- Factor Detail';
+        document.getElementById('radarChart').innerHTML = '<div class="loading"><span class="spinner"></span> Loading...</div>';
+        document.getElementById('subFactorGrid').innerHTML = '';
+        openModal('stockDetailModal');
+
+        fetch('/api/screener/stock/' + encodeURIComponent(ticker))
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+                if (!d || d.error) {
+                    document.getElementById('radarChart').innerHTML = '<p class="text-muted">' + (d.error || 'No data available.') + '</p>';
+                    return;
+                }
+                var fs = d.factor_scores || {};
+                var categories = ['Value', 'Quality', 'Momentum', 'Growth', 'Sentiment'];
+                var values = [fs.value || 0, fs.quality || 0, fs.momentum || 0, fs.growth || 0, fs.sentiment || 0];
+                values.push(values[0]);
+                categories.push(categories[0]);
+
+                Plotly.newPlot('radarChart', [{
+                    type: 'scatterpolar', r: values, theta: categories,
+                    fill: 'toself', fillcolor: 'rgba(0,212,170,0.15)',
+                    line: {color: '#00D4AA', width: 2},
+                    marker: {size: 6, color: '#00D4AA'}
+                }], Object.assign({}, DARK_LAYOUT, {
+                    height: 320, margin: {t: 30, b: 30, l: 60, r: 60},
+                    polar: {
+                        bgcolor: 'rgba(0,0,0,0)',
+                        radialaxis: {visible: true, range: [0, 100], color: '#555', gridcolor: '#333'},
+                        angularaxis: {color: '#e0e0e0', gridcolor: '#333'}
+                    }
+                }), CHART_CONFIG);
+
+                var subFactors = d.sub_factor_scores || {};
+                var html = '';
+                Object.keys(subFactors).forEach(function(family) {
+                    var color = FACTOR_COLORS[family] || '#aaa';
+                    html += '<div class="subfactor-family">';
+                    html += '<div class="subfactor-family-title" style="border-left-color:' + color + ';">' + family.charAt(0).toUpperCase() + family.slice(1) + '</div>';
+                    var subs = subFactors[family];
+                    Object.keys(subs).forEach(function(key) {
+                        var val = subs[key];
+                        var cls = val >= 75 ? 'positive' : val < 40 ? 'negative' : '';
+                        html += '<div class="subfactor-item"><span>' + key + '</span><span class="' + cls + '">' + (typeof val === 'number' ? val.toFixed(1) : val) + '</span></div>';
+                    });
+                    html += '</div>';
+                });
+                document.getElementById('subFactorGrid').innerHTML = '<div class="subfactor-grid">' + html + '</div>';
+            })
+            .catch(function(err) {
+                document.getElementById('radarChart').innerHTML = '<p class="negative">Failed to load: ' + err.message + '</p>';
+            });
+    };
+})();
+{% endif %}
+</script>
+{% endblock %}

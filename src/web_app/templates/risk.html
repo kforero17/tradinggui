@@ -1,0 +1,687 @@
+{% extends "base.html" %}
+{% block title %}Risk Dashboard{% endblock %}
+
+{% block head_extra %}
+<script src="https://cdn.plot.ly/plotly-2.26.0.min.js"></script>
+<style>
+    .risk-header { text-align: center; padding: 1.5rem 0 0.5rem; }
+    .risk-header h1 { margin: 0; font-size: 1.8rem; color: var(--text-heading); }
+    .risk-memo-date { color: var(--text-muted); font-size: 0.95rem; margin-top: 0.25rem; }
+
+    .risk-executive { display: flex; gap: 1.5rem; margin: 1.5rem 0; align-items: center; flex-wrap: wrap; justify-content: center; }
+    .risk-score-badge { width: 120px; height: 120px; border-radius: 50%; display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 2.5rem; font-weight: bold; color: white; flex-shrink: 0; }
+    .risk-score-label { font-size: 0.75rem; font-weight: normal; margin-top: 0.25rem; text-align: center; }
+    .risk-metrics { display: flex; gap: 1rem; flex-wrap: wrap; flex: 1; justify-content: center; }
+
+    .risk-section { margin-top: 2rem; }
+    .section-title { color: var(--text-heading); font-size: 1.1rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem; margin-bottom: 1rem; }
+
+    .charts-row { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+
+    .risk-table { width: 100%; border-collapse: collapse; }
+    .risk-table th, .risk-table td { padding: 0.6rem 0.8rem; border-bottom: 1px solid var(--border-color); text-align: left; font-size: 0.9rem; }
+    .risk-table th { color: var(--text-muted); font-weight: normal; font-size: 0.85rem; background-color: var(--bg-header); }
+    .risk-table tr:hover { background-color: var(--bg-card-hover); }
+
+    .scenario-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+    .scenario-card { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 8px; padding: 1.25rem; }
+    .scenario-name { font-weight: bold; color: var(--text-heading); margin-bottom: 0.25rem; }
+    .scenario-desc { color: var(--text-muted); font-size: 0.85rem; margin-bottom: 0.75rem; }
+    .scenario-impact { font-size: 1.5rem; font-weight: bold; color: var(--color-negative); }
+    .scenario-impact-dollar { font-size: 0.95rem; color: var(--color-negative); margin-bottom: 0.75rem; }
+    .scenario-subtable { width: 100%; border-collapse: collapse; margin-top: 0.5rem; font-size: 0.8rem; }
+    .scenario-subtable th, .scenario-subtable td { padding: 0.3rem 0.4rem; border-bottom: 1px solid var(--border-color); text-align: left; }
+    .scenario-subtable th { color: var(--text-muted); font-weight: normal; }
+
+    .hedge-card { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 8px; padding: 1rem; margin-bottom: 0.75rem; display: flex; gap: 1rem; align-items: flex-start; }
+    .priority-badge { width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 0.85rem; flex-shrink: 0; color: white; }
+    .hedge-body { flex: 1; }
+    .hedge-type { font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.25rem; }
+    .hedge-instrument { font-weight: bold; color: var(--text-heading); margin-bottom: 0.25rem; }
+    .hedge-action { color: var(--accent-green); font-size: 0.9rem; margin-bottom: 0.25rem; }
+    .hedge-rationale { color: var(--text-muted); font-size: 0.85rem; margin-bottom: 0.25rem; }
+    .hedge-cost { font-size: 0.8rem; color: var(--color-warning); }
+
+    .earnings-timeline { margin-bottom: 1rem; }
+    .catalyst-item { display: flex; align-items: center; gap: 1rem; padding: 0.5rem 0; border-bottom: 1px solid var(--border-color); }
+    .catalyst-ticker { font-weight: bold; min-width: 60px; color: var(--text-heading); }
+    .catalyst-date { font-size: 0.85rem; color: var(--text-muted); min-width: 100px; }
+    .catalyst-days { font-size: 0.8rem; padding: 0.2rem 0.5rem; border-radius: 12px; background: var(--bg-header); }
+
+    .cell-warn { background-color: rgba(255, 193, 7, 0.15); }
+    .cell-danger { color: var(--color-negative); font-weight: bold; }
+    .cell-caution { color: var(--color-warning); }
+
+    .loading { display: flex; align-items: center; gap: 0.75rem; color: var(--text-muted); padding: 1.5rem 0; }
+
+    @media (max-width: 768px) {
+        .charts-row, .scenario-grid { grid-template-columns: 1fr; }
+        .risk-executive { flex-direction: column; }
+        .risk-metrics { justify-content: flex-start; }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+
+<!-- Header -->
+<div class="risk-header">
+    <h1>Portfolio Risk Dashboard</h1>
+    <div class="risk-memo-date">Risk Memo &mdash; {{ report_date if report_date else 'March 13, 2026' }}</div>
+</div>
+
+{% if core_risk.error is defined %}
+<!-- Error State -->
+<div class="card" style="text-align:center; padding: 3rem; margin-top: 2rem;">
+    <p class="text-muted">{{ core_risk.error }}</p>
+    <a href="{{ url_for('portfolio') }}">Return to Portfolio</a>
+</div>
+
+{% else %}
+
+<!-- 1. Executive Summary -->
+<div class="card risk-section">
+    <div class="risk-executive">
+        <!-- Risk Score Badge -->
+        {% set score = core_risk.risk_score.score %}
+        {% if score <= 25 %}
+            {% set badge_color = '#28a745' %}
+        {% elif score <= 50 %}
+            {% set badge_color = '#007bff' %}
+        {% elif score <= 75 %}
+            {% set badge_color = '#ffc107' %}
+        {% else %}
+            {% set badge_color = '#dc3545' %}
+        {% endif %}
+        <div class="risk-score-badge" style="background-color: {{ badge_color }};">
+            {{ score }}
+            <span class="risk-score-label">{{ core_risk.risk_score.label }}</span>
+        </div>
+
+        <!-- Metric Cards -->
+        <div class="risk-metrics">
+            <div class="metric-card">
+                <div class="metric-label">Portfolio Vol</div>
+                <div class="metric-value">{{ "%.1f"|format(core_risk.volatility.portfolio_vol * 100) }}%</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-label">Beta (Up)</div>
+                <div class="metric-value">{{ "%.2f"|format(core_risk.beta.portfolio_beta) }}</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-label">Beta (Down)</div>
+                <div class="metric-value {{ 'negative' if core_risk.beta.portfolio_down_beta > 1.2 else '' }}">{{ "%.2f"|format(core_risk.beta.portfolio_down_beta) }}</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-label">Max DD (10yr)</div>
+                <div class="metric-value negative">{{ "%.1f"|format(core_risk.drawdown.portfolio_max_dd) }}%</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-label">Avg Correlation</div>
+                <div class="metric-value {{ 'negative' if core_risk.correlation.avg_correlation > 0.7 else '' }}">{{ "%.2f"|format(core_risk.correlation.avg_correlation) }}</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-label">Rate Sensitivity</div>
+                <div class="metric-value {{ 'negative' if core_risk.rate_sensitivity.portfolio_tnx_corr > 0.5 else 'positive' if core_risk.rate_sensitivity.portfolio_tnx_corr < -0.3 else '' }}">{{ "%.2f"|format(core_risk.rate_sensitivity.portfolio_tnx_corr) }}</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 2. Risk Memo Summary Table -->
+<div class="card risk-section">
+    <div class="section-title">Risk Summary Table</div>
+    <div style="overflow-x: auto;">
+        <table class="risk-table">
+            <thead>
+                <tr>
+                    <th>Ticker</th>
+                    <th>Weight %</th>
+                    <th>Vol %</th>
+                    <th>Up Beta</th>
+                    <th>Down Beta</th>
+                    <th>Max DD %</th>
+                    <th>TNX Corr</th>
+                    <th>Liquidity</th>
+                    <th>Risk Contrib %</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in core_risk.summary_table %}
+                <tr>
+                    <td><strong>{{ row.ticker }}</strong></td>
+                    <td class="{{ 'cell-warn' if row.weight > 20 else '' }}">{{ "%.1f"|format(row.weight) }}%</td>
+                    <td>{{ "%.1f"|format(row.vol) }}%</td>
+                    <td>{{ "%.2f"|format(row.up_beta) }}</td>
+                    <td class="{{ 'cell-danger' if row.down_beta > 1.5 else 'cell-caution' if row.down_beta > 1.2 else '' }}">{{ "%.2f"|format(row.down_beta) }}</td>
+                    <td class="{{ 'cell-danger' if row.max_dd < -30 else 'cell-caution' if row.max_dd < -20 else '' }}">{{ "%.1f"|format(row.max_dd) }}%</td>
+                    <td class="{{ 'cell-danger' if row.tnx_corr > 0.6 else '' }}">{{ "%.2f"|format(row.tnx_corr) }}</td>
+                    <td>{{ row.liquidity_tier }}</td>
+                    <td>{{ "%.1f"|format(row.risk_contrib_pct) }}%</td>
+                </tr>
+                {% else %}
+                <tr><td colspan="9" class="text-muted" style="text-align:center; padding: 2rem;">No data available.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- 3. Charts Row 1: Volatility + Beta -->
+<div class="charts-row risk-section">
+    <div class="card">
+        <div class="section-title">Volatility Profile</div>
+        <div id="volChart"></div>
+    </div>
+    <div class="card">
+        <div class="section-title">Beta Analysis (Up vs Down)</div>
+        <div id="betaChart"></div>
+    </div>
+</div>
+
+<!-- 4. Charts Row 2: Correlation + Sector -->
+<div class="charts-row risk-section">
+    <div class="card">
+        <div class="section-title">Correlation Heatmap</div>
+        <div id="corrChart"></div>
+    </div>
+    <div class="card">
+        <div class="section-title">Sector Concentration</div>
+        <div id="sectorChart"></div>
+    </div>
+</div>
+
+<!-- 5. Drawdown History (full width) -->
+<div class="card risk-section">
+    <div class="section-title">Portfolio Drawdown History</div>
+    <div id="drawdownChart"></div>
+    <div style="margin-top: 1.5rem;">
+        <div class="section-title" style="font-size: 1rem;">Worst Drawdowns (Top 5)</div>
+        <table class="risk-table">
+            <thead>
+                <tr>
+                    <th>Rank</th>
+                    <th>Depth</th>
+                    <th>Start</th>
+                    <th>End</th>
+                    <th>Duration (Days)</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for dd in core_risk.drawdown.worst_drawdowns[:5] %}
+                <tr>
+                    <td>{{ loop.index }}</td>
+                    <td class="cell-danger">{{ "%.1f"|format(dd.depth) }}%</td>
+                    <td>{{ dd.start }}</td>
+                    <td>{{ dd.end }}</td>
+                    <td>{{ dd.duration_days }}</td>
+                </tr>
+                {% else %}
+                <tr><td colspan="5" class="text-muted" style="text-align:center;">No drawdown data available.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- 6. Rate Sensitivity + Liquidity -->
+<div class="charts-row risk-section">
+    <div class="card">
+        <div class="section-title">Rate Sensitivity (TNX Correlation)</div>
+        <div id="rateChart"></div>
+    </div>
+    <div class="card">
+        <div class="section-title">Days to Liquidate</div>
+        <div id="liqChart"></div>
+    </div>
+</div>
+
+<!-- 7. Implied Volatility (async) -->
+<div class="card risk-section">
+    <div class="section-title">Implied Volatility vs Historical</div>
+    <div id="ivContainer">
+        <div class="loading"><span class="spinner"></span> Loading implied volatility data...</div>
+    </div>
+</div>
+
+<!-- 8. Stress Tests (async) -->
+<div class="card risk-section">
+    <div class="section-title">Stress Test Scenarios</div>
+    <div id="stressContainer">
+        <div class="loading"><span class="spinner"></span> Running stress test scenarios...</div>
+    </div>
+</div>
+
+<!-- 9. Earnings Risk (async) -->
+<div class="card risk-section">
+    <div class="section-title">Earnings Risk &amp; Upcoming Catalysts</div>
+    <div id="earningsContainer">
+        <div class="loading"><span class="spinner"></span> Loading earnings risk data...</div>
+    </div>
+</div>
+
+<!-- 10. Hedging Recommendations (async) -->
+<div class="card risk-section">
+    <div class="section-title">Hedging Recommendations</div>
+    <div id="hedgingContainer">
+        <div class="loading"><span class="spinner"></span> Generating hedging recommendations...</div>
+    </div>
+</div>
+
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if core_risk.error is not defined %}
+<script>
+(function() {
+    // ---------------------------------------------------------------------------
+    // Data from server
+    // ---------------------------------------------------------------------------
+    var volData       = {{ core_risk.volatility | tojson }};
+    var betaData      = {{ core_risk.beta | tojson }};
+    var corrData      = {{ core_risk.correlation | tojson }};
+    var sectorData    = {{ core_risk.sector | tojson }};
+    var drawdownData  = {{ core_risk.drawdown | tojson }};
+    var rateData      = {{ core_risk.rate_sensitivity | tojson }};
+    var liqData       = {{ core_risk.liquidity | tojson }};
+
+    var PALETTE = ['#00D4AA', '#FF6B6B', '#4ECDC4', '#FFD700', '#FF69B4', '#00BFFF', '#9370DB', '#FF8C00', '#32CD32', '#FF4500'];
+    var CHART_CONFIG = {responsive: true};
+    var DARK_LAYOUT_BASE = {
+        template: 'plotly_dark',
+        paper_bgcolor: 'rgba(0,0,0,0)',
+        plot_bgcolor: 'rgba(0,0,0,0)',
+        font: {color: '#e0e0e0'},
+        margin: {t: 20, b: 60, l: 60, r: 20}
+    };
+
+    // ---------------------------------------------------------------------------
+    // 1. Volatility Bar Chart
+    // ---------------------------------------------------------------------------
+    (function renderVolChart() {
+        var tickers = Object.keys(volData.per_ticker);
+        var vols = tickers.map(function(t) { return volData.per_ticker[t].vol * 100; });
+        var spyVol = volData.spy_vol * 100;
+
+        var traces = [
+            {
+                type: 'bar',
+                x: tickers,
+                y: vols,
+                name: 'Annualized Vol %',
+                marker: {color: PALETTE[0]},
+                hovertemplate: '%{x}: %{y:.1f}%<extra></extra>'
+            },
+            {
+                type: 'scatter',
+                x: tickers,
+                y: tickers.map(function() { return spyVol; }),
+                mode: 'lines',
+                name: 'SPY Vol (' + spyVol.toFixed(1) + '%)',
+                line: {color: '#FF6B6B', dash: 'dash', width: 2},
+                hovertemplate: 'SPY: ' + spyVol.toFixed(1) + '%<extra></extra>'
+            }
+        ];
+
+        var layout = Object.assign({}, DARK_LAYOUT_BASE, {
+            height: 300,
+            yaxis: {title: 'Volatility (%)', ticksuffix: '%'},
+            legend: {orientation: 'h', y: -0.2}
+        });
+
+        Plotly.newPlot('volChart', traces, layout, CHART_CONFIG);
+    })();
+
+    // ---------------------------------------------------------------------------
+    // 2. Beta Grouped Bar Chart
+    // ---------------------------------------------------------------------------
+    (function renderBetaChart() {
+        var tickers = Object.keys(betaData.per_ticker);
+        var upBetas = tickers.map(function(t) { return betaData.per_ticker[t].up_beta; });
+        var downBetas = tickers.map(function(t) { return betaData.per_ticker[t].down_beta; });
+
+        var traces = [
+            {
+                type: 'bar',
+                x: tickers,
+                y: upBetas,
+                name: 'Up Beta',
+                marker: {color: '#00D4AA'},
+                hovertemplate: '%{x} Up Beta: %{y:.2f}<extra></extra>'
+            },
+            {
+                type: 'bar',
+                x: tickers,
+                y: downBetas,
+                name: 'Down Beta',
+                marker: {color: '#FF6B6B'},
+                hovertemplate: '%{x} Down Beta: %{y:.2f}<extra></extra>'
+            }
+        ];
+
+        var layout = Object.assign({}, DARK_LAYOUT_BASE, {
+            height: 300,
+            barmode: 'group',
+            yaxis: {title: 'Beta'},
+            shapes: [{
+                type: 'line', x0: -0.5, x1: tickers.length - 0.5,
+                y0: 1, y1: 1,
+                line: {color: '#888', dash: 'dot', width: 1}
+            }],
+            legend: {orientation: 'h', y: -0.2}
+        });
+
+        Plotly.newPlot('betaChart', traces, layout, CHART_CONFIG);
+    })();
+
+    // ---------------------------------------------------------------------------
+    // 3. Correlation Heatmap
+    // ---------------------------------------------------------------------------
+    (function renderCorrChart() {
+        var tickers = corrData.tickers;
+        if (!tickers || tickers.length === 0) { return; }
+        var matrix = corrData.matrix;
+        var z = tickers.map(function(t) {
+            return tickers.map(function(t2) {
+                return (matrix[t] && matrix[t][t2] !== undefined) ? matrix[t][t2] : 0;
+            });
+        });
+        var textVals = z.map(function(row) { return row.map(function(v) { return v.toFixed(2); }); });
+
+        var trace = {
+            type: 'heatmap',
+            x: tickers,
+            y: tickers,
+            z: z,
+            colorscale: 'RdYlGn',
+            zmin: -1,
+            zmax: 1,
+            text: textVals,
+            texttemplate: '%{text}',
+            hovertemplate: '%{y} / %{x}: %{z:.2f}<extra></extra>',
+            colorbar: {thickness: 12, len: 0.8}
+        };
+
+        var layout = Object.assign({}, DARK_LAYOUT_BASE, {
+            height: 320,
+            margin: {t: 20, b: 80, l: 80, r: 20},
+            xaxis: {tickangle: -30},
+        });
+
+        Plotly.newPlot('corrChart', [trace], layout, CHART_CONFIG);
+    })();
+
+    // ---------------------------------------------------------------------------
+    // 4. Sector Pie Chart
+    // ---------------------------------------------------------------------------
+    (function renderSectorChart() {
+        var weights = sectorData.sector_weights;
+        var labels = Object.keys(weights);
+        var values = labels.map(function(s) { return weights[s]; });
+
+        var trace = {
+            type: 'pie',
+            labels: labels,
+            values: values,
+            hole: 0.4,
+            textinfo: 'label+percent',
+            marker: {colors: PALETTE},
+            hovertemplate: '%{label}: %{value:.1f}%<extra></extra>'
+        };
+
+        var layout = Object.assign({}, DARK_LAYOUT_BASE, {
+            height: 320,
+            margin: {t: 20, b: 20, l: 20, r: 20},
+            showlegend: false
+        });
+
+        Plotly.newPlot('sectorChart', [trace], layout, CHART_CONFIG);
+    })();
+
+    // ---------------------------------------------------------------------------
+    // 5. Drawdown Area Chart
+    // ---------------------------------------------------------------------------
+    (function renderDrawdownChart() {
+        var series = drawdownData.portfolio_drawdown_series;
+        if (!series || !series.dates || series.dates.length === 0) { return; }
+
+        var trace = {
+            type: 'scatter',
+            mode: 'lines',
+            x: series.dates,
+            y: series.values,
+            fill: 'tozeroy',
+            fillcolor: 'rgba(220, 53, 69, 0.15)',
+            line: {color: '#dc3545', width: 1.5},
+            name: 'Drawdown %',
+            hovertemplate: '%{x}: %{y:.1f}%<extra></extra>'
+        };
+
+        var layout = Object.assign({}, DARK_LAYOUT_BASE, {
+            height: 260,
+            yaxis: {title: 'Drawdown (%)', ticksuffix: '%'},
+            margin: {t: 20, b: 40, l: 60, r: 20}
+        });
+
+        Plotly.newPlot('drawdownChart', [trace], layout, CHART_CONFIG);
+    })();
+
+    // ---------------------------------------------------------------------------
+    // 6. Rate Sensitivity Bar Chart
+    // ---------------------------------------------------------------------------
+    (function renderRateChart() {
+        var tickers = Object.keys(rateData.per_ticker);
+        var corrs = tickers.map(function(t) { return rateData.per_ticker[t].tnx_corr; });
+        var colors = corrs.map(function(c) { return c > 0.4 ? '#FF6B6B' : c < -0.3 ? '#00D4AA' : '#4ECDC4'; });
+
+        var trace = {
+            type: 'bar',
+            x: tickers,
+            y: corrs,
+            name: 'TNX Correlation',
+            marker: {color: colors},
+            hovertemplate: '%{x}: %{y:.2f}<extra></extra>'
+        };
+
+        var layout = Object.assign({}, DARK_LAYOUT_BASE, {
+            height: 300,
+            yaxis: {title: 'TNX Correlation', range: [-1, 1]},
+            shapes: [{
+                type: 'line', x0: -0.5, x1: tickers.length - 0.5,
+                y0: 0, y1: 0,
+                line: {color: '#888', width: 1}
+            }]
+        });
+
+        Plotly.newPlot('rateChart', [trace], layout, CHART_CONFIG);
+    })();
+
+    // ---------------------------------------------------------------------------
+    // 7. Liquidity Bar Chart
+    // ---------------------------------------------------------------------------
+    (function renderLiqChart() {
+        var tickers = Object.keys(liqData.per_ticker);
+        var days = tickers.map(function(t) { return liqData.per_ticker[t].days_to_liquidate; });
+        var colors = days.map(function(d) { return d > 5 ? '#FF6B6B' : d > 2 ? '#ffc107' : '#00D4AA'; });
+
+        var trace = {
+            type: 'bar',
+            x: tickers,
+            y: days,
+            name: 'Days to Liquidate',
+            marker: {color: colors},
+            hovertemplate: '%{x}: %{y:.1f} days<extra></extra>'
+        };
+
+        var layout = Object.assign({}, DARK_LAYOUT_BASE, {
+            height: 300,
+            yaxis: {title: 'Days to Liquidate'}
+        });
+
+        Plotly.newPlot('liqChart', [trace], layout, CHART_CONFIG);
+    })();
+
+    // ---------------------------------------------------------------------------
+    // Async Section Loader
+    // ---------------------------------------------------------------------------
+    function loadAsyncSection(url, containerId, renderFn) {
+        fetch(url)
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data.success) {
+                    renderFn(data, containerId);
+                } else {
+                    document.getElementById(containerId).innerHTML =
+                        '<p class="text-muted">Data unavailable: ' + (data.error || 'Unknown error') + '</p>';
+                }
+            })
+            .catch(function(err) {
+                document.getElementById(containerId).innerHTML =
+                    '<p class="text-muted">Failed to load: ' + err.message + '</p>';
+            });
+    }
+
+    // ---------------------------------------------------------------------------
+    // 8. Implied Volatility Renderer
+    // ---------------------------------------------------------------------------
+    function renderIV(data, containerId) {
+        var pt = data.per_ticker;
+        if (!pt || Object.keys(pt).length === 0) {
+            document.getElementById(containerId).innerHTML = '<p class="text-muted">No implied volatility data available.</p>';
+            return;
+        }
+        var rows = Object.keys(pt).map(function(ticker) {
+            var row = pt[ticker];
+            var ivhvClass = row.iv_hv_ratio > 1.5 ? 'cell-danger' : row.iv_hv_ratio > 1.2 ? 'cell-caution' : '';
+            return '<tr>' +
+                '<td><strong>' + ticker + '</strong></td>' +
+                '<td>' + (row.atm_call_iv ? (row.atm_call_iv * 100).toFixed(1) + '%' : 'N/A') + '</td>' +
+                '<td>' + (row.atm_put_iv ? (row.atm_put_iv * 100).toFixed(1) + '%' : 'N/A') + '</td>' +
+                '<td class="' + ivhvClass + '">' + (row.iv_hv_ratio ? row.iv_hv_ratio.toFixed(2) : 'N/A') + '</td>' +
+                '<td>' + (row.put_call_skew ? (row.put_call_skew * 100).toFixed(2) + '%' : 'N/A') + '</td>' +
+                '</tr>';
+        }).join('');
+        var avg = data.avg_iv_hv_ratio ? '<p style="color:var(--text-muted); margin-top:0.5rem;">Average IV/HV Ratio: <strong>' + data.avg_iv_hv_ratio.toFixed(2) + '</strong></p>' : '';
+        document.getElementById(containerId).innerHTML =
+            '<table class="risk-table">' +
+            '<thead><tr><th>Ticker</th><th>ATM Call IV</th><th>ATM Put IV</th><th>IV / HV Ratio</th><th>Put-Call Skew</th></tr></thead>' +
+            '<tbody>' + rows + '</tbody>' +
+            '</table>' + avg;
+    }
+
+    // ---------------------------------------------------------------------------
+    // 9. Stress Tests Renderer
+    // ---------------------------------------------------------------------------
+    function renderStress(data, containerId) {
+        if (!data.scenarios || data.scenarios.length === 0) {
+            document.getElementById(containerId).innerHTML = '<p class="text-muted">No stress test scenarios available.</p>';
+            return;
+        }
+        var cards = data.scenarios.map(function(s) {
+            var impactDollar = s.portfolio_impact_dollars !== undefined
+                ? '$' + Math.abs(s.portfolio_impact_dollars).toLocaleString('en-US', {maximumFractionDigits: 0})
+                : '';
+            var subRows = '';
+            if (s.per_ticker) {
+                Object.keys(s.per_ticker).forEach(function(ticker) {
+                    var ti = s.per_ticker[ticker];
+                    subRows += '<tr><td>' + ticker + '</td><td class="cell-danger">' +
+                        ti.impact_pct.toFixed(1) + '%</td><td class="cell-danger">$' +
+                        Math.abs(ti.impact_dollars).toLocaleString('en-US', {maximumFractionDigits: 0}) + '</td></tr>';
+                });
+            }
+            var subTable = subRows
+                ? '<table class="scenario-subtable"><thead><tr><th>Ticker</th><th>Impact %</th><th>Impact $</th></tr></thead><tbody>' + subRows + '</tbody></table>'
+                : '';
+            return '<div class="scenario-card">' +
+                '<div class="scenario-name">' + s.name + '</div>' +
+                '<div class="scenario-desc">' + (s.description || '') + '</div>' +
+                '<div class="scenario-impact">' + s.portfolio_impact_pct.toFixed(1) + '%</div>' +
+                (impactDollar ? '<div class="scenario-impact-dollar">-' + impactDollar + '</div>' : '') +
+                subTable +
+                '</div>';
+        }).join('');
+        document.getElementById(containerId).innerHTML = '<div class="scenario-grid">' + cards + '</div>';
+    }
+
+    // ---------------------------------------------------------------------------
+    // 10. Earnings Risk Renderer
+    // ---------------------------------------------------------------------------
+    function renderEarnings(data, containerId) {
+        var catalysts = data.upcoming_catalysts || [];
+        var pt = data.per_ticker || {};
+        if (catalysts.length === 0 && Object.keys(pt).length === 0) {
+            document.getElementById(containerId).innerHTML = '<p class="text-muted">No earnings risk data available.</p>';
+            return;
+        }
+        var catalystHtml = catalysts.map(function(e) {
+            var urgencyStyle = e.days_until <= 7 ? 'background:#dc354533;color:#FF6B6B;' :
+                               e.days_until <= 21 ? 'background:#ffc10733;color:#FFD700;' :
+                               'background:#1e1e1e;';
+            return '<div class="catalyst-item">' +
+                '<span class="catalyst-ticker">' + e.ticker + '</span>' +
+                '<span class="catalyst-date">' + e.date + '</span>' +
+                '<span class="catalyst-days" style="' + urgencyStyle + '">' + e.days_until + 'd away</span>' +
+                '<span style="flex:1; font-size:0.85rem; color:var(--text-muted);">$ at Risk: ' +
+                (e.dollar_at_risk ? '$' + e.dollar_at_risk.toLocaleString('en-US', {maximumFractionDigits: 0}) : 'N/A') + '</span>' +
+                '</div>';
+        }).join('');
+
+        var tableRows = Object.keys(pt).map(function(ticker) {
+            var e = pt[ticker];
+            return '<tr>' +
+                '<td><strong>' + ticker + '</strong></td>' +
+                '<td>' + (e.next_earnings || 'N/A') + '</td>' +
+                '<td>' + (e.avg_earnings_move ? e.avg_earnings_move.toFixed(1) + '%' : 'N/A') + '</td>' +
+                '<td>' + (e.max_earnings_move ? e.max_earnings_move.toFixed(1) + '%' : 'N/A') + '</td>' +
+                '<td>' + (e.dollar_at_risk ? '$' + e.dollar_at_risk.toLocaleString('en-US', {maximumFractionDigits: 0}) : 'N/A') + '</td>' +
+                '</tr>';
+        }).join('');
+
+        document.getElementById(containerId).innerHTML =
+            (catalystHtml ? '<div class="section-title" style="font-size:1rem;">Upcoming Catalysts (60 days)</div><div class="earnings-timeline">' + catalystHtml + '</div>' : '') +
+            '<table class="risk-table" style="margin-top:1rem;">' +
+            '<thead><tr><th>Ticker</th><th>Next Earnings</th><th>Avg Move %</th><th>Max Move %</th><th>$ at Risk</th></tr></thead>' +
+            '<tbody>' + tableRows + '</tbody>' +
+            '</table>';
+    }
+
+    // ---------------------------------------------------------------------------
+    // 11. Hedging Recommendations Renderer
+    // ---------------------------------------------------------------------------
+    function renderHedging(data, containerId) {
+        if (!data.recommendations || data.recommendations.length === 0) {
+            document.getElementById(containerId).innerHTML = '<p class="text-muted">No hedging recommendations available.</p>';
+            return;
+        }
+        var priorityColors = ['#dc3545', '#e83e4a', '#fd7e14', '#ffc107', '#17a2b8', '#6c757d'];
+        var cards = data.recommendations.map(function(rec) {
+            var priority = Math.min(rec.priority || 1, 6);
+            var badgeColor = priorityColors[priority - 1] || priorityColors[5];
+            return '<div class="hedge-card">' +
+                '<div class="priority-badge" style="background-color:' + badgeColor + ';">' + priority + '</div>' +
+                '<div class="hedge-body">' +
+                '<div class="hedge-type">' + (rec.type || '') + '</div>' +
+                '<div class="hedge-instrument">' + (rec.instrument || '') + '</div>' +
+                '<div class="hedge-action">' + (rec.action || '') + '</div>' +
+                '<div class="hedge-rationale">' + (rec.rationale || '') + '</div>' +
+                (rec.estimated_cost ? '<div class="hedge-cost">Est. Cost: ' + rec.estimated_cost + '</div>' : '') +
+                '</div>' +
+                '</div>';
+        }).join('');
+        document.getElementById(containerId).innerHTML = cards;
+    }
+
+    // ---------------------------------------------------------------------------
+    // Fire async loads after DOM is ready
+    // ---------------------------------------------------------------------------
+    loadAsyncSection('/api/risk/implied-volatility',  'ivContainer',       renderIV);
+    loadAsyncSection('/api/risk/stress-tests',         'stressContainer',   renderStress);
+    loadAsyncSection('/api/risk/earnings-risk',        'earningsContainer', renderEarnings);
+    loadAsyncSection('/api/risk/hedging',              'hedgingContainer',  renderHedging);
+
+})();
+</script>
+{% endif %}
+{% endblock %}

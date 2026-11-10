@@ -1,0 +1,155 @@
+{% extends "base.html" %}
+{% block title %}Market Analytics{% endblock %}
+
+{% block head_extra %}
+<script src="https://cdn.plot.ly/plotly-2.26.0.min.js"></script>
+<style>
+    .analytics-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; margin-bottom: 2rem; }
+    .full-width { grid-column: 1 / -1; }
+    .section-title { color: var(--text-heading); font-size: 1.2rem; margin-bottom: 1rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem; }
+    .breadth-cards { display: flex; gap: 1rem; flex-wrap: wrap; margin-bottom: 1.5rem; }
+    .breadth-card { flex: 1; min-width: 150px; }
+    .movers-table { width: 100%; border-collapse: collapse; }
+    .movers-table th, .movers-table td { padding: 0.6rem; text-align: left; border-bottom: 1px solid var(--border-color); font-size: 0.9rem; }
+    .movers-table th { color: var(--text-muted); font-weight: normal; }
+    .comparative-form { display: flex; gap: 1rem; margin-bottom: 1rem; align-items: center; flex-wrap: wrap; }
+    .comparative-form input { flex: 1; min-width: 250px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header"><h1>Market Analytics</h1></div>
+
+<!-- Market Breadth -->
+<div class="card" style="margin-bottom: 2rem;">
+    <div class="section-title">Market Breadth</div>
+    {% if breadth %}
+    <div class="breadth-cards">
+        <div class="metric-card breadth-card">
+            <div class="metric-label">Stocks Tracked</div>
+            <div class="metric-value">{{ breadth.total_stocks }}</div>
+        </div>
+        <div class="metric-card breadth-card">
+            <div class="metric-label">% Above MA-100</div>
+            <div class="metric-value {{ 'positive' if breadth.pct_above_ma > 50 else 'negative' }}">{{ breadth.pct_above_ma }}%</div>
+        </div>
+        <div class="metric-card breadth-card">
+            <div class="metric-label">% RSI &gt; 50 (Bullish)</div>
+            <div class="metric-value {{ 'positive' if breadth.pct_rsi_above_50 > 50 else 'negative' }}">{{ breadth.pct_rsi_above_50 }}%</div>
+        </div>
+        <div class="metric-card breadth-card">
+            <div class="metric-label">% Overbought (RSI &ge; 70)</div>
+            <div class="metric-value negative">{{ breadth.pct_overbought }}%</div>
+        </div>
+        <div class="metric-card breadth-card">
+            <div class="metric-label">% Oversold (RSI &le; 30)</div>
+            <div class="metric-value positive">{{ breadth.pct_oversold }}%</div>
+        </div>
+    </div>
+    {% else %}
+    <p class="text-muted">No data available. Run the batch processor to populate metrics.</p>
+    {% endif %}
+</div>
+
+<div class="analytics-grid">
+    <!-- Sector Heatmap -->
+    <div class="card">
+        <div class="section-title">Sector Heatmap</div>
+        <div id="sectorHeatmap" class="loading"><span class="spinner"></span> Loading heatmap...</div>
+    </div>
+
+    <!-- Comparative Chart -->
+    <div class="card">
+        <div class="section-title">Comparative Analysis</div>
+        <div class="comparative-form">
+            <input type="text" id="compareTickers" placeholder="Enter tickers, e.g. AAPL, MSFT, GOOGL">
+            <button onclick="loadComparative()">Compare</button>
+        </div>
+        <div id="comparativeChart"></div>
+    </div>
+
+    <!-- Top Gainers -->
+    <div class="card">
+        <div class="section-title">Top 10 Momentum Gainers</div>
+        {% if top_gainers %}
+        <table class="movers-table">
+            <thead><tr><th>Ticker</th><th>Price</th><th>% Above MA</th><th>RSI</th><th>Sector</th></tr></thead>
+            <tbody>
+            {% for s in top_gainers %}
+            <tr>
+                <td class="ticker-cell" onclick="window.location='/research?ticker={{ s.ticker }}'">{{ s.ticker }}</td>
+                <td>${{ "%.2f"|format(s.last_price) if s.last_price else 'N/A' }}</td>
+                <td class="positive">+{{ "%.1f"|format(s.pct_above_ma_100) }}%</td>
+                <td class="{{ 'negative' if s.rsi_14 is not none and s.rsi_14 >= 70 else '' }}">{{ "%.0f"|format(s.rsi_14) if s.rsi_14 is not none else 'N/A' }}</td>
+                <td>{{ s.sector or '—' }}</td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p class="text-muted">No data available.</p>
+        {% endif %}
+    </div>
+
+    <!-- Top Losers -->
+    <div class="card">
+        <div class="section-title">Top 10 Momentum Losers</div>
+        {% if top_losers %}
+        <table class="movers-table">
+            <thead><tr><th>Ticker</th><th>Price</th><th>% Below MA</th><th>RSI</th><th>Sector</th></tr></thead>
+            <tbody>
+            {% for s in top_losers %}
+            <tr>
+                <td class="ticker-cell" onclick="window.location='/research?ticker={{ s.ticker }}'">{{ s.ticker }}</td>
+                <td>${{ "%.2f"|format(s.last_price) if s.last_price else 'N/A' }}</td>
+                <td class="negative">{{ "%.1f"|format(s.pct_above_ma_100) }}%</td>
+                <td class="{{ 'positive' if s.rsi_14 is not none and s.rsi_14 <= 30 else '' }}">{{ "%.0f"|format(s.rsi_14) if s.rsi_14 is not none else 'N/A' }}</td>
+                <td>{{ s.sector or '—' }}</td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p class="text-muted">No data available.</p>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Load sector heatmap on page load
+    fetch('/api/analytics/sector-heatmap')
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (data.success && data.plot_data) {
+                var pd = JSON.parse(data.plot_data);
+                Plotly.newPlot('sectorHeatmap', pd.data, pd.layout, {responsive: true});
+            } else {
+                document.getElementById('sectorHeatmap').innerHTML = '<p class="text-muted">No sector data available. Run batch processor with sector data enabled.</p>';
+            }
+        })
+        .catch(function() {
+            document.getElementById('sectorHeatmap').innerHTML = '<p class="negative">Failed to load heatmap.</p>';
+        });
+
+    function loadComparative() {
+        var tickers = document.getElementById('compareTickers').value.trim();
+        if (!tickers) return;
+        showLoading('comparativeChart');
+        fetch('/api/analytics/comparative?tickers=' + encodeURIComponent(tickers))
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data.success && data.plot_data) {
+                    var pd = JSON.parse(data.plot_data);
+                    Plotly.newPlot('comparativeChart', pd.data, pd.layout, {responsive: true});
+                } else {
+                    document.getElementById('comparativeChart').innerHTML = '<p class="negative">' + (data.error || 'Error') + '</p>';
+                }
+            })
+            .catch(function(err) {
+                document.getElementById('comparativeChart').innerHTML = '<p class="negative">Error: ' + err.message + '</p>';
+            });
+    }
+</script>
+{% endblock %}
