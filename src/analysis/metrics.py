@@ -5,6 +5,7 @@ from ..config.ssl_config import configure_ssl_verification
 configure_ssl_verification()
 
 from typing import Optional, Dict, Any, List
+from collections.abc import Iterable, Mapping
 from datetime import date, datetime, timedelta
 import pandas as pd
 import numpy as np
@@ -22,7 +23,7 @@ import yfinance as yf
 from concurrent.futures import ThreadPoolExecutor
 
 from ..config.settings import settings
-from ..data.database import db, OPTION_CONTRACT_MULTIPLIER
+from ..data.database import OPTION_CONTRACT_MULTIPLIER
 
 
 class RateLimiter:
@@ -146,6 +147,185 @@ def calculate_bollinger_bands(
         "bb_middle": round(float(middle), 4),
         "bb_lower": round(float(middle - num_std * std_val), 4),
     }
+
+
+# Bars needed for the 100-day moving averages
+MIN_HISTORY_BARS = 100
+
+
+def compute_technical_metrics(ticker: str, ohlc: pd.DataFrame) -> dict | None:
+    """Technical metrics for one ticker from its daily bars; no network.
+
+    Returns the technical ``StockMetrics`` columns (price, MA/EMA100, RSI14, MACD,
+    Bollinger) plus ``avg_dollar_volume_50d``, the mean close x volume over the last
+    UNIVERSE_LIQUIDITY_LOOKBACK_DAYS bars. None with fewer than MIN_HISTORY_BARS
+    closes, or when the price or a moving average isn't a finite number.
+    """
+    if ohlc is None:
+        return None
+    bars = ohlc.dropna(subset=["close"])
+    if len(bars) < MIN_HISTORY_BARS:
+        return None
+
+    close_prices = bars["close"].astype(float)
+    ma_100 = float(close_prices.rolling(window=100).mean().iloc[-1])
+    ema_100 = float(close_prices.ewm(span=100, adjust=False).mean().iloc[-1])
+    last_price = float(close_prices.iloc[-1])
+    if not all(np.isfinite(v) for v in (last_price, ma_100, ema_100)):
+        return None
+
+    recent = bars.tail(settings.UNIVERSE_LIQUIDITY_LOOKBACK_DAYS)
+    dollar_volume = float((recent["close"] * recent["volume"]).mean())
+
+    return {
+        "ticker": ticker,
+        "last_price": last_price,
+        "ma_100": ma_100,
+        "ema_100": ema_100,
+        "pct_above_ma_100": (last_price - ma_100) / ma_100 * 100 if ma_100 else 0,
+        "pct_above_ema_100": (last_price - ema_100) / ema_100 * 100 if ema_100 else 0,
+        # Technical indicators
+        "rsi_14": calculate_rsi(close_prices, period=14),
+        **calculate_macd(close_prices),
+        **calculate_bollinger_bands(close_prices),
+        "avg_dollar_volume_50d": dollar_volume if np.isfinite(dollar_volume) else None,
+        "updated_at": datetime.utcnow(),
+    }
+
+
+# ── Fundamentals (.info) ──────────────────────────────────────────────
+
+# Valuation and classification columns filled from yfinance .info
+FUNDAMENTALS_KEYS = (
+    "market_cap",
+    "pe_ratio",
+    "pb_ratio",
+    "enterprise_value",
+    "ebitda",
+    "ebitda_ev",
+    "ps_ratio",
+    "sector",
+    "industry",
+)
+
+_fundamentals_rate_limiter = RateLimiter(
+    calls_per_second=settings.FUNDAMENTALS_REQUESTS_PER_SECOND
+)
+
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=4, max=30),
+    retry=retry_if_exception_type(StockdexAPIError),
+)
+def _fetch_info(ticker: str) -> dict:
+    """yfinance .info for one ticker; rate limiting is raised as StockdexAPIError so it's retried."""
+    _fundamentals_rate_limiter.wait()
+    try:
+        return yf.Ticker(ticker).info
+    except Exception as e:
+        error_msg = str(e)
+        if "Too Many Requests" in error_msg or "Rate limited" in error_msg:
+            logger.warning(f"Rate limited for {ticker} valuation, will retry...")
+            raise StockdexAPIError(f"Rate limited for {ticker}") from e
+        raise
+
+
+def _fundamentals_from_info(ticker: str, info: dict) -> Dict[str, Any]:
+    """Valuation metrics, sector and industry from a .info dict (Nones where missing)."""
+    metrics: Dict[str, Any] = dict.fromkeys(FUNDAMENTALS_KEYS)
+
+    # --- 1. Get Market Cap and Quote Type ---
+    quote_type = info.get("quoteType", "")
+    metrics["market_cap"] = info.get("marketCap", None)
+
+    if quote_type == "ETF":
+        logger.info(
+            f"{ticker} is an ETF. Standard valuation metrics are not applicable."
+        )
+        return metrics  # Return with just market_cap and Nones for the rest
+
+    # --- 2. Get valuation metrics directly from info ---
+    enterprise_value = info.get("enterpriseValue", None)
+    ebitda = info.get("ebitda", None)
+
+    # Calculate EV/EBITDA if both are available
+    ev_ebitda = None
+    if enterprise_value and ebitda and ebitda > 0:
+        ev_ebitda = enterprise_value / ebitda
+
+    metrics.update(
+        {
+            "pe_ratio": info.get("trailingPE", None),
+            "pb_ratio": info.get("priceToBook", None),
+            "enterprise_value": enterprise_value,
+            "ebitda": ebitda,
+            "ebitda_ev": ev_ebitda,
+            "ps_ratio": info.get("priceToSalesTrailing12Months", None),
+            # Sector and industry classification
+            "sector": info.get("sector", None),
+            "industry": info.get("industry", None),
+        }
+    )
+    return metrics
+
+
+def fetch_fundamentals(ticker: str) -> dict | None:
+    """FUNDAMENTALS_KEYS plus ``fundamentals_updated_at`` from yfinance .info.
+
+    Rate limited at FUNDAMENTALS_REQUESTS_PER_SECOND and retried while Yahoo
+    throttles. Any failure, including retries running out, is logged and returns
+    None, so the caller keeps the ticker's technicals and its stored fundamentals.
+    """
+    try:
+        info = _fetch_info(ticker)
+    except RetryError as e:
+        logger.warning(f"Giving up on fundamentals for {ticker} after retries: {e}")
+        return None
+    except Exception as e:
+        logger.error(f"Error fetching fundamentals for {ticker}: {e}")
+        return None
+
+    if not info:
+        logger.warning(f"Could not fetch info for {ticker}")
+        return None
+    return {
+        **_fundamentals_from_info(ticker, info),
+        "fundamentals_updated_at": datetime.utcnow(),
+    }
+
+
+def select_fundamentals_due(
+    candidates: Mapping[str, bool],
+    ages: Mapping[str, datetime | None],
+    holdings: Iterable[str],
+    max_age_days: int,
+    now: datetime,
+) -> list[str]:
+    """Tickers whose fundamentals should be fetched in this run, in fetch order.
+
+    ``candidates`` maps each liquid ticker to whether it's an ETF; ``ages`` is when
+    each ticker's fundamentals were last fetched (None or absent if never). Every
+    holding is due. A non-ETF candidate is due when it was never fetched or was
+    fetched ``max_age_days`` or more calendar days before ``now``, so a weekly run
+    at a slightly earlier time of day still picks it up. Holdings come first, then
+    the rest; each group oldest first, never-fetched before all others.
+    """
+
+    def oldest_first(ticker: str) -> tuple[bool, datetime, str]:
+        fetched_at = ages.get(ticker)
+        return (fetched_at is not None, fetched_at or now, ticker)
+
+    held = set(holdings)
+    cutoff = now.date() - timedelta(days=max_age_days)
+    stale = [
+        t
+        for t, is_etf in candidates.items()
+        if not is_etf
+        and t not in held
+        and (ages.get(t) is None or ages[t].date() <= cutoff)
+    ]
+    return sorted(held, key=oldest_first) + sorted(stale, key=oldest_first)
 
 
 def evaluate_alerts(metrics: Dict[str, Any], active_alerts: List[dict]) -> List[str]:
@@ -301,97 +481,17 @@ class StockMetricsCalculator:
         logger.info(f"Trying StockDex fallback for {ticker}")
         return self._get_historical_data_from_stockdex(ticker, start_date, today)
 
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=4, max=30),
-        retry=retry_if_exception_type(StockdexAPIError),
-    )
-    def _get_valuation_metrics(
-        self, ticker: str, last_price: Optional[float] = None
-    ) -> Dict[str, Any]:
-        """Fetch and compute valuation metrics from yfinance (via Yahoo Finance)."""
-        metrics = {
-            "market_cap": None,
-            "pe_ratio": None,
-            "pb_ratio": None,
-            "enterprise_value": None,
-            "ebitda": None,
-            "ebitda_ev": None,
-            "ps_ratio": None,
-            "sector": None,
-            "industry": None,
-        }
-
+    def _get_valuation_metrics(self, ticker: str) -> Dict[str, Any]:
+        """Fundamentals from fetch_fundamentals, or FUNDAMENTALS_KEYS all None if it failed."""
         if self.use_mock_data:
             mock_data = self._generate_mock_valuation_data(ticker)
-            metrics.update(mock_data)
-            return metrics
+            return {**dict.fromkeys(FUNDAMENTALS_KEYS), **mock_data}
 
-        if last_price is None:
-            logger.warning(
-                f"Cannot calculate valuation metrics for {ticker} without a share price."
-            )
-            return metrics
-
-        self.rate_limiter.wait()
-
-        try:
-            stock = yf.Ticker(ticker)
-            info = stock.info
-
-            if not info:
-                logger.warning(f"Could not fetch info for {ticker}")
-                return metrics
-
-            # --- 1. Get Market Cap and Quote Type ---
-            quote_type = info.get("quoteType", "")
-            market_cap = info.get("marketCap", None)
-            metrics["market_cap"] = market_cap
-
-            if quote_type == "ETF":
-                logger.info(
-                    f"{ticker} is an ETF. Standard valuation metrics are not applicable."
-                )
-                return metrics  # Return with just market_cap and Nones for the rest
-
-            # --- 2. Get valuation metrics directly from info ---
-            pe_ratio = info.get("trailingPE", None)
-            pb_ratio = info.get("priceToBook", None)
-            ps_ratio = info.get("priceToSalesTrailing12Months", None)
-            enterprise_value = info.get("enterpriseValue", None)
-            ebitda = info.get("ebitda", None)
-
-            # Calculate EV/EBITDA if both are available
-            ev_ebitda = None
-            if enterprise_value and ebitda and ebitda > 0:
-                ev_ebitda = enterprise_value / ebitda
-
-            # Sector and industry classification
-            sector = info.get("sector", None)
-            industry = info.get("industry", None)
-
-            metrics.update(
-                {
-                    "pe_ratio": pe_ratio,
-                    "pb_ratio": pb_ratio,
-                    "enterprise_value": enterprise_value,
-                    "ebitda": ebitda,
-                    "ebitda_ev": ev_ebitda,
-                    "ps_ratio": ps_ratio,
-                    "sector": sector,
-                    "industry": industry,
-                }
-            )
-            return metrics
-        except Exception as e:
-            error_msg = str(e)
-            if "Too Many Requests" in error_msg or "Rate limited" in error_msg:
-                logger.warning(f"Rate limited for {ticker} valuation, will retry...")
-                raise StockdexAPIError(f"Rate limited for {ticker}") from e
-            logger.error(
-                f"Error calculating valuation metrics for {ticker}: {e}", exc_info=False
-            )
-            return metrics
+        fundamentals = fetch_fundamentals(ticker)
+        if fundamentals is None:
+            # The failure is logged; keep the technicals and leave the valuation empty
+            return dict.fromkeys(FUNDAMENTALS_KEYS)
+        return fundamentals
 
     def _parse_financial_number(self, value: Any) -> Optional[float]:
         """Convert string like '8.71B' or '439.26M' to float."""
@@ -420,49 +520,29 @@ class StockMetricsCalculator:
 
     def calculate_momentum_metrics(self, hist_data: pd.DataFrame) -> Dict[str, Any]:
         """Calculate momentum-based metrics including technical indicators."""
-        if hist_data is None or hist_data.shape[0] < 100:
-            raise ValueError("Insufficient historical data for momentum calculation.")
-
-        close_prices = hist_data["close"]
-        ma_100 = close_prices.rolling(window=100).mean().iloc[-1]
-        ema_100 = close_prices.ewm(span=100, adjust=False).mean().iloc[-1]
-        last_price = close_prices.iloc[-1]
-
-        # Technical indicators
-        rsi_val = calculate_rsi(close_prices, period=14)
-        macd_vals = calculate_macd(close_prices)
-        bb_vals = calculate_bollinger_bands(close_prices)
-
-        return {
-            "last_price": last_price,
-            "ma_100": ma_100,
-            "ema_100": ema_100,
-            "pct_above_ma_100": (last_price - ma_100) / ma_100 * 100 if ma_100 else 0,
-            "pct_above_ema_100": (last_price - ema_100) / ema_100 * 100
-            if ema_100
-            else 0,
-            "rsi_14": rsi_val,
-            **macd_vals,
-            **bb_vals,
-        }
+        momentum = compute_technical_metrics("", hist_data)
+        if momentum is None:
+            raise ValueError(
+                "Insufficient or invalid historical data for momentum calculation."
+            )
+        del momentum["ticker"]
+        return momentum
 
     def get_metrics(self, ticker: str) -> Optional[Dict[str, Any]]:
-        """Get all metrics for a ticker."""
+        """Get all metrics for a ticker.
+
+        A fundamentals failure leaves the valuation keys None instead of dropping
+        the ticker's technicals.
+        """
         try:
             hist_data = self._get_historical_data(ticker)
             if hist_data is None:
                 return None
 
             momentum_metrics = self.calculate_momentum_metrics(hist_data)
-            valuation_metrics = self._get_valuation_metrics(
-                ticker, last_price=momentum_metrics.get("last_price")
-            )
+            valuation_metrics = self._get_valuation_metrics(ticker)
 
             metrics = {"ticker": ticker, **momentum_metrics, **valuation_metrics}
-
-            if not self._validate_momentum_metrics(metrics):
-                logger.warning(f"Invalid momentum metrics for {ticker}")
-                return None
 
             logger.success(f"Successfully generated metrics for {ticker}")
             return metrics
@@ -479,62 +559,26 @@ class StockMetricsCalculator:
     def get_metrics_batch(
         self, tickers: List[str], max_workers: int = None
     ) -> List[Dict[str, Any]]:
-        """Get metrics for multiple tickers in parallel with rate limiting."""
-        max_workers = max_workers or settings.MAX_CONCURRENT_WORKERS
-        all_metrics = []
-        total_tickers = len(tickers)
+        """Refresh metrics for many tickers through the batched pipeline.
 
+        Delegates to ``src.jobs.metrics_refresh.refresh_metrics``, which downloads
+        bars in chunks, rotates fundamentals and stores every row itself, so this
+        returns an empty list. Mock mode still computes per ticker and returns rows.
+        """
+        if self.use_mock_data:
+            max_workers = max_workers or settings.MAX_CONCURRENT_WORKERS
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                return [m for m in executor.map(self.get_metrics, tickers) if m]
+
+        # metrics_refresh imports this module (and price_history imports RateLimiter
+        # from it), so it can only be imported once this module has loaded
+        from ..jobs.metrics_refresh import refresh_metrics
+
+        stats = refresh_metrics(list(tickers))
         logger.info(
-            f"Processing {total_tickers} tickers with {max_workers} workers (rate: {settings.REQUESTS_PER_SECOND}/sec)."
+            f"Batch processing complete. Stored metrics for {stats.computed}/{stats.tickers} tickers."
         )
-
-        # 1. Filter out tickers that have been updated recently
-        tickers_to_process = [
-            t
-            for t in tickers
-            if not db.has_recent_metrics(t, self.recent_data_age_limit_days)
-        ]
-
-        skipped_count = total_tickers - len(tickers_to_process)
-        if skipped_count > 0:
-            logger.info(f"Skipped {skipped_count} tickers with recent data.")
-
-        if not tickers_to_process:
-            logger.info("No tickers to process after filtering.")
-            return []
-
-        # 2. Process remaining tickers in parallel
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            results = executor.map(self.get_metrics, tickers_to_process)
-
-            successful_count = 0
-            for metrics in results:
-                if metrics:
-                    all_metrics.append(metrics)
-                    successful_count += 1
-
-        logger.info(
-            f"Batch processing complete. Successfully fetched metrics for {successful_count}/{len(tickers_to_process)} tickers."
-        )
-        return all_metrics
-
-    def _validate_momentum_metrics(self, metrics: Dict[str, Any]) -> bool:
-        """Validate calculated momentum metrics."""
-        required_fields = ["ticker", "last_price", "ma_100", "ema_100"]
-
-        if not all(
-            field in metrics and metrics[field] is not None for field in required_fields
-        ):
-            return False
-
-        for field in required_fields:
-            if field != "ticker":
-                value = metrics[field]
-                if isinstance(value, (int, float)) and (
-                    np.isnan(value) or np.isinf(value)
-                ):
-                    return False
-        return True
+        return []
 
     def _generate_mock_historical_data(self, ticker: str) -> pd.DataFrame:
         """Generate mock historical data for testing."""
