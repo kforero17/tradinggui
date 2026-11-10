@@ -47,11 +47,11 @@ The crypto pipeline has no autonomous scheduler. It requires Claude (or another 
 
 ### Portfolio Data
 
-Managed interactively through the web UI. Users add positions, update shares/cost basis, and record sales. Realized gains are tracked with YTD calculations.
+Managed interactively through the web UI. Users add long or short stock positions and option positions, update shares/cost basis, and record sales, covers and option closes. Realized gains are tracked with YTD calculations.
 
 ## Data Model
 
-SQLite database at `data/processed/stock_metrics.db` with four tables:
+SQLite database at `data/processed/stock_metrics.db` with these tables:
 
 ### `valuation_momentum`
 
@@ -73,8 +73,20 @@ Per-ticker stock metrics (one row per ticker, upserted on refresh):
 | Column | Description |
 |---|---|
 | `ticker` (PK) | Symbol |
-| `shares` | Quantity held |
-| `cost_basis` | Total cost (not per-share) |
+| `shares` | Quantity held; negative for a short |
+| `cost_basis` | Total cost, or total short-sale proceeds for a short (not per-share) |
+| `added_at` | Position open date |
+
+### `option_positions`
+
+| Column | Description |
+|---|---|
+| `id` (PK) | UUID |
+| `underlying` | Underlying symbol |
+| `option_type` | `call` or `put` |
+| `strike`, `expiry` | Contract terms |
+| `contracts` | Contract count; negative for written options (100 shares per contract) |
+| `cost_basis` | Total premium paid, or received for written options |
 | `added_at` | Position open date |
 
 ### `realized_gains`
@@ -82,8 +94,8 @@ Per-ticker stock metrics (one row per ticker, upserted on refresh):
 | Column | Description |
 |---|---|
 | `id` (PK) | UUID |
-| `ticker`, `shares_sold` | What was sold |
-| `cost_basis`, `sale_price` | Per-share cost and sale price |
+| `ticker`, `shares_sold` | What was sold. Negative `shares_sold` is a short cover or a written option bought back. Options use the OCC symbol (e.g. `SPCX270115P00140000`) and `shares_sold` = contracts × 100 |
+| `cost_basis`, `sale_price` | Per-share cost and sale price (per-share premium for options) |
 | `year_start_price` | Jan 1 price (for YTD gain calc) |
 | `realized_gain` | `(sale_price - year_start_price) * shares` |
 | `sold_at` | Sale timestamp |
@@ -125,9 +137,13 @@ Calculated live per page load using yfinance historical data:
 | 1M | First close on or after the 1st of current month |
 | YTD | First close on or after Jan 1 (or `added_at` if later) |
 
-Each returns dollar gain (`price_change * shares`) and percent gain.
+Each returns dollar gain (`price_change * shares`) and percent gain. For a short, shares are negative, so a falling price is a gain and the percent gain is inverted.
 
-**Portfolio summary** aggregates all positions into total value, day gain, and YTD gain (unrealized + realized from `realized_gains` table).
+### Option Positions
+
+Each page load fetches the contract from the yfinance option chain. The mark is the bid/ask midpoint, or the last trade when either side is zero. Market value is `mark * contracts * 100`, unrealized gain is measured against the opening premium, and day gain uses the chain's `change` field. YTD gain for an option is its unrealized gain since open, so it overstates YTD for an option opened before Jan 1. A contract missing from the chain (for example, after expiry) shows "Quote unavailable" and is left out of the totals; close it at its final value (0 if it expired worthless).
+
+**Portfolio summary** aggregates stock and option positions into net market value, day gain, and YTD gain (unrealized + realized from `realized_gains` table). Day and YTD percentages are measured against gross exposure (the sum of absolute position values), so shorts don't shrink the base. The portfolio risk overview weights positions by gross exposure, with shorts carrying negative weights. Options are not included in the risk overview, and the `/risk` dashboard covers long stock positions only.
 
 ### Crypto Metrics
 
@@ -144,7 +160,7 @@ Start with `python run_web_app.py` (default: `http://127.0.0.1:8051`).
 
 | Route | Page | Description |
 |---|---|---|
-| `/` | Portfolio | All holdings with period gains (1D/1W/1M/YTD), Plotly price charts, summary totals. Add/sell/update positions. |
+| `/` | Portfolio | All holdings with period gains (1D/1W/1M/YTD), Plotly price charts, summary totals. Add/sell/cover/update stock positions; add/close option positions. |
 | `/research` | Research | Single-stock lookup. Searches DB first, falls back to live yfinance fetch. Shows chart + metrics. |
 | `/momentum` | Momentum | Screener table filterable by market cap and % above MA-100. Click for chart modal. |
 | `/crypto` | Crypto | Crypto trends table filterable by 24h volume. Shows MA/EMA deviation and 24h stats. |
@@ -211,3 +227,23 @@ Settings are managed via `pydantic-settings` and can be overridden in `.env`:
 Core: `Flask`, `SQLAlchemy`, `pandas`, `yfinance`, `plotly`, `pydantic-settings`, `loguru`, `tenacity`
 
 Optional: `PyQt6` (desktop browser), `stockdex` (yfinance fallback), `gunicorn` (production server)
+
+### Crypto Trends live data
+
+Open `/crypto` to start the public Crypto.com market feed. No API key is needed.
+The server discovers USD spot pairs from the ticker feed and saves quotes every
+60 seconds while the server remains running, including when the tab is closed.
+The browser checks saved quotes every 15 seconds while visible. Each app worker
+runs its own feed; a single worker avoids duplicate provider requests.
+
+Search symbols, filter by USD volume, or sort by volume and 24-hour movers.
+Select a market for a 180-candle hourly or daily price chart with 50-period
+simple and exponential moving averages. Historical candles are cached for five
+minutes and refreshed while the page is visible. USD volume uses the provider's
+quote-currency turnover, not the number of coins traded.
+
+Quote timestamps show when the server received data. Quotes older than three
+minutes are marked stale. Provider failures retain saved quotes and cached
+charts, display an error, and retry automatically. Chart history is cached in
+memory and reloaded after a server restart. Public data source:
+[Crypto.com Exchange API](https://exchange-developer.crypto.com/exchange/v1).

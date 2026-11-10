@@ -1,21 +1,28 @@
 # Configure SSL verification BEFORE importing yfinance
 # yfinance uses curl_cffi which requires environment variables set before import
 from ..config.ssl_config import configure_ssl_verification
+
 configure_ssl_verification()
 
 from typing import Optional, Dict, Any, List
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 import pandas as pd
 import numpy as np
 from loguru import logger
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type, RetryError
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_exponential,
+    retry_if_exception_type,
+    RetryError,
+)
 import time
 import threading
 import yfinance as yf
 from concurrent.futures import ThreadPoolExecutor
 
 from ..config.settings import settings
-from ..data.database import db
+from ..data.database import db, OPTION_CONTRACT_MULTIPLIER
 
 
 class RateLimiter:
@@ -34,12 +41,15 @@ class RateLimiter:
                 time.sleep(self.min_interval - elapsed)
             self.last_call = time.time()
 
+
 class StockdexAPIError(Exception):
     """Custom exception for Stockdex API errors."""
+
     pass
 
 
 # ── Technical indicator calculations ──────────────────────────────────
+
 
 def calculate_rsi(close_prices: pd.Series, period: int = 14) -> Optional[float]:
     """Calculate Relative Strength Index (RSI).
@@ -52,7 +62,7 @@ def calculate_rsi(close_prices: pd.Series, period: int = 14) -> Optional[float]:
 
     delta = close_prices.diff()
     gains = delta.clip(lower=0)
-    losses = (-delta.clip(upper=0))
+    losses = -delta.clip(upper=0)
 
     # Wilder's smoothing (equivalent to EMA with alpha = 1/period)
     avg_gain = gains.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
@@ -76,14 +86,14 @@ def calculate_macd(
     close_prices: pd.Series,
     fast_period: int = 12,
     slow_period: int = 26,
-    signal_period: int = 9
+    signal_period: int = 9,
 ) -> Dict[str, Optional[float]]:
     """Calculate MACD line, signal line, and histogram.
 
     Returns dict with 'macd', 'macd_signal', 'macd_histogram'.
     All values are None if insufficient data.
     """
-    result = {'macd': None, 'macd_signal': None, 'macd_histogram': None}
+    result = {"macd": None, "macd_signal": None, "macd_histogram": None}
 
     min_required = slow_period + signal_period
     if close_prices is None or len(close_prices) < min_required:
@@ -103,23 +113,21 @@ def calculate_macd(
         return result
 
     return {
-        'macd': round(float(macd_val), 4),
-        'macd_signal': round(float(signal_val), 4),
-        'macd_histogram': round(float(hist_val), 4),
+        "macd": round(float(macd_val), 4),
+        "macd_signal": round(float(signal_val), 4),
+        "macd_histogram": round(float(hist_val), 4),
     }
 
 
 def calculate_bollinger_bands(
-    close_prices: pd.Series,
-    period: int = 20,
-    num_std: float = 2.0
+    close_prices: pd.Series, period: int = 20, num_std: float = 2.0
 ) -> Dict[str, Optional[float]]:
     """Calculate Bollinger Bands (upper, middle, lower).
 
     Returns dict with 'bb_upper', 'bb_middle', 'bb_lower'.
     All values are None if insufficient data.
     """
-    result = {'bb_upper': None, 'bb_middle': None, 'bb_lower': None}
+    result = {"bb_upper": None, "bb_middle": None, "bb_lower": None}
 
     if close_prices is None or len(close_prices) < period:
         return result
@@ -134,9 +142,9 @@ def calculate_bollinger_bands(
         return result
 
     return {
-        'bb_upper': round(float(middle + num_std * std_val), 4),
-        'bb_middle': round(float(middle), 4),
-        'bb_lower': round(float(middle - num_std * std_val), 4),
+        "bb_upper": round(float(middle + num_std * std_val), 4),
+        "bb_middle": round(float(middle), 4),
+        "bb_lower": round(float(middle - num_std * std_val), 4),
     }
 
 
@@ -150,35 +158,42 @@ def evaluate_alerts(metrics: Dict[str, Any], active_alerts: List[dict]) -> List[
     Returns:
         List of alert IDs that were newly triggered.
     """
-    ticker = metrics.get('ticker', '')
+    ticker = metrics.get("ticker", "")
     triggered_ids = []
 
-    relevant = [a for a in active_alerts if a['ticker'] == ticker and not a['is_triggered']]
+    relevant = [
+        a for a in active_alerts if a["ticker"] == ticker and not a["is_triggered"]
+    ]
 
     for alert in relevant:
         condition_met = False
-        alert_type = alert['alert_type']
-        threshold = alert['threshold']
+        alert_type = alert["alert_type"]
+        threshold = alert["threshold"]
 
-        if alert_type == 'price_above' and metrics.get('last_price') is not None:
-            condition_met = metrics['last_price'] >= threshold
-        elif alert_type == 'price_below' and metrics.get('last_price') is not None:
-            condition_met = metrics['last_price'] <= threshold
-        elif alert_type == 'rsi_overbought' and metrics.get('rsi_14') is not None:
-            condition_met = metrics['rsi_14'] >= threshold
-        elif alert_type == 'rsi_oversold' and metrics.get('rsi_14') is not None:
-            condition_met = metrics['rsi_14'] <= threshold
-        elif alert_type == 'macd_crossover' and metrics.get('macd_histogram') is not None:
+        if alert_type == "price_above" and metrics.get("last_price") is not None:
+            condition_met = metrics["last_price"] >= threshold
+        elif alert_type == "price_below" and metrics.get("last_price") is not None:
+            condition_met = metrics["last_price"] <= threshold
+        elif alert_type == "rsi_overbought" and metrics.get("rsi_14") is not None:
+            condition_met = metrics["rsi_14"] >= threshold
+        elif alert_type == "rsi_oversold" and metrics.get("rsi_14") is not None:
+            condition_met = metrics["rsi_14"] <= threshold
+        elif (
+            alert_type == "macd_crossover" and metrics.get("macd_histogram") is not None
+        ):
             # Triggered when MACD histogram crosses above zero (bullish crossover)
-            condition_met = metrics['macd_histogram'] > 0
-        elif alert_type == 'pct_change' and metrics.get('pct_above_ma_100') is not None:
-            condition_met = abs(metrics['pct_above_ma_100']) >= threshold
+            condition_met = metrics["macd_histogram"] > 0
+        elif alert_type == "pct_change" and metrics.get("pct_above_ma_100") is not None:
+            condition_met = abs(metrics["pct_above_ma_100"]) >= threshold
 
         if condition_met:
-            triggered_ids.append(alert['id'])
-            logger.info(f"Alert triggered: {alert_type} for {ticker} (threshold: {threshold})")
+            triggered_ids.append(alert["id"])
+            logger.info(
+                f"Alert triggered: {alert_type} for {ticker} (threshold: {threshold})"
+            )
 
     return triggered_ids
+
 
 class StockMetricsCalculator:
     def __init__(self, use_mock_data: bool = False):
@@ -186,13 +201,15 @@ class StockMetricsCalculator:
         self.use_mock_data = use_mock_data
         self.recent_data_age_limit_days = settings.RECENT_DATA_AGE_LIMIT_DAYS
         self.rate_limiter = RateLimiter(calls_per_second=settings.REQUESTS_PER_SECOND)
-        
+
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=4, max=30),
-        retry=retry_if_exception_type(StockdexAPIError)
+        retry=retry_if_exception_type(StockdexAPIError),
     )
-    def _get_historical_data_from_yfinance(self, ticker: str, start_date: datetime, end_date: datetime) -> Optional[pd.DataFrame]:
+    def _get_historical_data_from_yfinance(
+        self, ticker: str, start_date: datetime, end_date: datetime
+    ) -> Optional[pd.DataFrame]:
         """Fetch historical data from yfinance (via Yahoo Finance)."""
         self.rate_limiter.wait()
 
@@ -201,13 +218,15 @@ class StockMetricsCalculator:
             df = stock.history(start=start_date, end=end_date, auto_adjust=True)
 
             if df.empty:
-                logger.warning(f"No historical data for {ticker} from {start_date.date()} to {end_date.date()}.")
+                logger.warning(
+                    f"No historical data for {ticker} from {start_date.date()} to {end_date.date()}."
+                )
                 return None
 
-            df.index.name = 't'
+            df.index.name = "t"
             df.columns = df.columns.str.lower()
 
-            required_cols = ['open', 'high', 'low', 'close', 'volume']
+            required_cols = ["open", "high", "low", "close", "volume"]
             available_cols = [col for col in required_cols if col in df.columns]
 
             if not available_cols:
@@ -221,17 +240,24 @@ class StockMetricsCalculator:
             if "Too Many Requests" in error_msg or "Rate limited" in error_msg:
                 logger.warning(f"Rate limited for {ticker}, will retry...")
                 raise StockdexAPIError(f"Rate limited for {ticker}") from e
-            logger.error(f"Failed to fetch historical data for {ticker} using yfinance: {e}")
-            raise StockdexAPIError(f"Could not fetch historical data for {ticker}") from e
+            logger.error(
+                f"Failed to fetch historical data for {ticker} using yfinance: {e}"
+            )
+            raise StockdexAPIError(
+                f"Could not fetch historical data for {ticker}"
+            ) from e
 
-    def _get_historical_data_from_stockdex(self, ticker: str, start_date: datetime, end_date: datetime) -> Optional[pd.DataFrame]:
+    def _get_historical_data_from_stockdex(
+        self, ticker: str, start_date: datetime, end_date: datetime
+    ) -> Optional[pd.DataFrame]:
         """Fallback: Fetch historical data from StockDex library."""
         self.rate_limiter.wait()
 
         try:
             from stockdex import Ticker as StockdexTicker
+
             stock = StockdexTicker(ticker=ticker)
-            df = stock.price(range='1y')
+            df = stock.price(range="1y")
 
             if df is None or df.empty:
                 logger.warning(f"No StockDex data for {ticker}")
@@ -239,7 +265,7 @@ class StockMetricsCalculator:
 
             df.columns = df.columns.str.lower()
 
-            required_cols = ['open', 'high', 'low', 'close', 'volume']
+            required_cols = ["open", "high", "low", "close", "volume"]
             available_cols = [col for col in required_cols if col in df.columns]
 
             if not available_cols:
@@ -259,7 +285,9 @@ class StockMetricsCalculator:
         today = datetime.utcnow()
         start_date = today - timedelta(days=self.lookback_days)
 
-        logger.info(f"Fetching historical data for {ticker} from {start_date.date()} to {today.date()}")
+        logger.info(
+            f"Fetching historical data for {ticker} from {start_date.date()} to {today.date()}"
+        )
 
         # Try yfinance first
         try:
@@ -276,14 +304,22 @@ class StockMetricsCalculator:
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=4, max=30),
-        retry=retry_if_exception_type(StockdexAPIError)
+        retry=retry_if_exception_type(StockdexAPIError),
     )
-    def _get_valuation_metrics(self, ticker: str, last_price: Optional[float] = None) -> Dict[str, Any]:
+    def _get_valuation_metrics(
+        self, ticker: str, last_price: Optional[float] = None
+    ) -> Dict[str, Any]:
         """Fetch and compute valuation metrics from yfinance (via Yahoo Finance)."""
         metrics = {
-            "market_cap": None, "pe_ratio": None, "pb_ratio": None,
-            "enterprise_value": None, "ebitda": None, "ebitda_ev": None,
-            "ps_ratio": None, "sector": None, "industry": None,
+            "market_cap": None,
+            "pe_ratio": None,
+            "pb_ratio": None,
+            "enterprise_value": None,
+            "ebitda": None,
+            "ebitda_ev": None,
+            "ps_ratio": None,
+            "sector": None,
+            "industry": None,
         }
 
         if self.use_mock_data:
@@ -292,7 +328,9 @@ class StockMetricsCalculator:
             return metrics
 
         if last_price is None:
-            logger.warning(f"Cannot calculate valuation metrics for {ticker} without a share price.")
+            logger.warning(
+                f"Cannot calculate valuation metrics for {ticker} without a share price."
+            )
             return metrics
 
         self.rate_limiter.wait()
@@ -300,66 +338,72 @@ class StockMetricsCalculator:
         try:
             stock = yf.Ticker(ticker)
             info = stock.info
-            
+
             if not info:
                 logger.warning(f"Could not fetch info for {ticker}")
                 return metrics
-            
+
             # --- 1. Get Market Cap and Quote Type ---
-            quote_type = info.get('quoteType', '')
-            market_cap = info.get('marketCap', None)
+            quote_type = info.get("quoteType", "")
+            market_cap = info.get("marketCap", None)
             metrics["market_cap"] = market_cap
 
-            if quote_type == 'ETF':
-                logger.info(f"{ticker} is an ETF. Standard valuation metrics are not applicable.")
+            if quote_type == "ETF":
+                logger.info(
+                    f"{ticker} is an ETF. Standard valuation metrics are not applicable."
+                )
                 return metrics  # Return with just market_cap and Nones for the rest
 
             # --- 2. Get valuation metrics directly from info ---
-            pe_ratio = info.get('trailingPE', None)
-            pb_ratio = info.get('priceToBook', None)
-            ps_ratio = info.get('priceToSalesTrailing12Months', None)
-            enterprise_value = info.get('enterpriseValue', None)
-            ebitda = info.get('ebitda', None)
-            
+            pe_ratio = info.get("trailingPE", None)
+            pb_ratio = info.get("priceToBook", None)
+            ps_ratio = info.get("priceToSalesTrailing12Months", None)
+            enterprise_value = info.get("enterpriseValue", None)
+            ebitda = info.get("ebitda", None)
+
             # Calculate EV/EBITDA if both are available
             ev_ebitda = None
             if enterprise_value and ebitda and ebitda > 0:
                 ev_ebitda = enterprise_value / ebitda
 
             # Sector and industry classification
-            sector = info.get('sector', None)
-            industry = info.get('industry', None)
+            sector = info.get("sector", None)
+            industry = info.get("industry", None)
 
-            metrics.update({
-                "pe_ratio": pe_ratio,
-                "pb_ratio": pb_ratio,
-                "enterprise_value": enterprise_value,
-                "ebitda": ebitda,
-                "ebitda_ev": ev_ebitda,
-                "ps_ratio": ps_ratio,
-                "sector": sector,
-                "industry": industry,
-            })
+            metrics.update(
+                {
+                    "pe_ratio": pe_ratio,
+                    "pb_ratio": pb_ratio,
+                    "enterprise_value": enterprise_value,
+                    "ebitda": ebitda,
+                    "ebitda_ev": ev_ebitda,
+                    "ps_ratio": ps_ratio,
+                    "sector": sector,
+                    "industry": industry,
+                }
+            )
             return metrics
         except Exception as e:
             error_msg = str(e)
             if "Too Many Requests" in error_msg or "Rate limited" in error_msg:
                 logger.warning(f"Rate limited for {ticker} valuation, will retry...")
                 raise StockdexAPIError(f"Rate limited for {ticker}") from e
-            logger.error(f"Error calculating valuation metrics for {ticker}: {e}", exc_info=False)
+            logger.error(
+                f"Error calculating valuation metrics for {ticker}: {e}", exc_info=False
+            )
             return metrics
 
     def _parse_financial_number(self, value: Any) -> Optional[float]:
         """Convert string like '8.71B' or '439.26M' to float."""
-        if value is None or (isinstance(value, str) and value.strip() in ['N/A', '']):
+        if value is None or (isinstance(value, str) and value.strip() in ["N/A", ""]):
             return None
-        
+
         if isinstance(value, (int, float)) and not np.isnan(value):
             return float(value)
 
         if isinstance(value, str):
             value = value.strip()
-            multipliers = {'T': 1e12, 'B': 1e9, 'M': 1e6, 'K': 1e3}
+            multipliers = {"T": 1e12, "B": 1e9, "M": 1e6, "K": 1e3}
             suffix = value[-1].upper()
 
             if suffix in multipliers:
@@ -368,10 +412,10 @@ class StockMetricsCalculator:
                 except (ValueError, TypeError):
                     return None
             try:
-                return float(value.replace(',', ''))
+                return float(value.replace(",", ""))
             except (ValueError, TypeError):
                 return None
-        
+
         return None
 
     def calculate_momentum_metrics(self, hist_data: pd.DataFrame) -> Dict[str, Any]:
@@ -379,7 +423,7 @@ class StockMetricsCalculator:
         if hist_data is None or hist_data.shape[0] < 100:
             raise ValueError("Insufficient historical data for momentum calculation.")
 
-        close_prices = hist_data['close']
+        close_prices = hist_data["close"]
         ma_100 = close_prices.rolling(window=100).mean().iloc[-1]
         ema_100 = close_prices.ewm(span=100, adjust=False).mean().iloc[-1]
         last_price = close_prices.iloc[-1]
@@ -394,7 +438,9 @@ class StockMetricsCalculator:
             "ma_100": ma_100,
             "ema_100": ema_100,
             "pct_above_ma_100": (last_price - ma_100) / ma_100 * 100 if ma_100 else 0,
-            "pct_above_ema_100": (last_price - ema_100) / ema_100 * 100 if ema_100 else 0,
+            "pct_above_ema_100": (last_price - ema_100) / ema_100 * 100
+            if ema_100
+            else 0,
             "rsi_14": rsi_val,
             **macd_vals,
             **bb_vals,
@@ -412,11 +458,7 @@ class StockMetricsCalculator:
                 ticker, last_price=momentum_metrics.get("last_price")
             )
 
-            metrics = {
-                "ticker": ticker,
-                **momentum_metrics,
-                **valuation_metrics
-            }
+            metrics = {"ticker": ticker, **momentum_metrics, **valuation_metrics}
 
             if not self._validate_momentum_metrics(metrics):
                 logger.warning(f"Invalid momentum metrics for {ticker}")
@@ -434,20 +476,25 @@ class StockMetricsCalculator:
             logger.error(f"Unexpected error processing {ticker}: {e}")
             return None
 
-    def get_metrics_batch(self, tickers: List[str], max_workers: int = None) -> List[Dict[str, Any]]:
+    def get_metrics_batch(
+        self, tickers: List[str], max_workers: int = None
+    ) -> List[Dict[str, Any]]:
         """Get metrics for multiple tickers in parallel with rate limiting."""
         max_workers = max_workers or settings.MAX_CONCURRENT_WORKERS
         all_metrics = []
         total_tickers = len(tickers)
 
-        logger.info(f"Processing {total_tickers} tickers with {max_workers} workers (rate: {settings.REQUESTS_PER_SECOND}/sec).")
+        logger.info(
+            f"Processing {total_tickers} tickers with {max_workers} workers (rate: {settings.REQUESTS_PER_SECOND}/sec)."
+        )
 
         # 1. Filter out tickers that have been updated recently
         tickers_to_process = [
-            t for t in tickers 
+            t
+            for t in tickers
             if not db.has_recent_metrics(t, self.recent_data_age_limit_days)
         ]
-        
+
         skipped_count = total_tickers - len(tickers_to_process)
         if skipped_count > 0:
             logger.info(f"Skipped {skipped_count} tickers with recent data.")
@@ -459,40 +506,55 @@ class StockMetricsCalculator:
         # 2. Process remaining tickers in parallel
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             results = executor.map(self.get_metrics, tickers_to_process)
-            
+
             successful_count = 0
             for metrics in results:
                 if metrics:
                     all_metrics.append(metrics)
                     successful_count += 1
 
-        logger.info(f"Batch processing complete. Successfully fetched metrics for {successful_count}/{len(tickers_to_process)} tickers.")
+        logger.info(
+            f"Batch processing complete. Successfully fetched metrics for {successful_count}/{len(tickers_to_process)} tickers."
+        )
         return all_metrics
 
     def _validate_momentum_metrics(self, metrics: Dict[str, Any]) -> bool:
         """Validate calculated momentum metrics."""
         required_fields = ["ticker", "last_price", "ma_100", "ema_100"]
-        
-        if not all(field in metrics and metrics[field] is not None for field in required_fields):
+
+        if not all(
+            field in metrics and metrics[field] is not None for field in required_fields
+        ):
             return False
 
         for field in required_fields:
             if field != "ticker":
                 value = metrics[field]
-                if isinstance(value, (int, float)) and (np.isnan(value) or np.isinf(value)):
+                if isinstance(value, (int, float)) and (
+                    np.isnan(value) or np.isinf(value)
+                ):
                     return False
         return True
-    
+
     def _generate_mock_historical_data(self, ticker: str) -> pd.DataFrame:
         """Generate mock historical data for testing."""
         logger.info(f"Generating mock historical data for {ticker}")
-        dates = pd.date_range(end=datetime.today(), periods=150, freq='D')
+        dates = pd.date_range(end=datetime.today(), periods=150, freq="D")
         base_price = 100 + (hash(ticker) % 50)
         prices = [base_price]
         for _ in range(149):
             prices.append(prices[-1] * (1 + np.random.normal(0.001, 0.02)))
-        
-        df = pd.DataFrame({'close': prices, 'open': prices, 'high': prices, 'low': prices, 'volume': prices}, index=dates)
+
+        df = pd.DataFrame(
+            {
+                "close": prices,
+                "open": prices,
+                "high": prices,
+                "low": prices,
+                "volume": prices,
+            },
+            index=dates,
+        )
         return df
 
     def _generate_mock_valuation_data(self, ticker: str) -> Dict[str, Any]:
@@ -510,9 +572,7 @@ class StockMetricsCalculator:
 
 
 def calculate_period_gains(
-    hist_data: pd.DataFrame,
-    shares: float,
-    added_at: Optional[datetime] = None
+    hist_data: pd.DataFrame, shares: float, added_at: Optional[datetime] = None
 ) -> Dict[str, Dict[str, Optional[float]]]:
     """Calculate gains for multiple time periods from historical data.
 
@@ -525,14 +585,18 @@ def calculate_period_gains(
         Dictionary with period gains:
         {'1D': {'gain_dollars': float, 'gain_percent': float}, ...}
     """
-    empty_gain = {'gain_dollars': None, 'gain_percent': None}
-    empty_gains = {'1D': empty_gain.copy(), '1W': empty_gain.copy(),
-                   '1M': empty_gain.copy(), 'YTD': empty_gain.copy()}
+    empty_gain = {"gain_dollars": None, "gain_percent": None}
+    empty_gains = {
+        "1D": empty_gain.copy(),
+        "1W": empty_gain.copy(),
+        "1M": empty_gain.copy(),
+        "YTD": empty_gain.copy(),
+    }
 
     if hist_data is None or hist_data.empty:
         return empty_gains
 
-    close_prices = hist_data['close'].dropna()
+    close_prices = hist_data["close"].dropna()
     if close_prices.empty:
         return empty_gains
 
@@ -542,17 +606,23 @@ def calculate_period_gains(
     gains = {}
 
     # 1D: today vs yesterday close
-    gains['1D'] = _calculate_gain_by_days(close_prices, current_price, shares, days_back=1)
+    gains["1D"] = _calculate_gain_by_days(
+        close_prices, current_price, shares, days_back=1
+    )
 
     # 1W: today vs ~7 calendar days ago (find closest trading day)
-    gains['1W'] = _calculate_gain_by_days(close_prices, current_price, shares, days_back=5)
+    gains["1W"] = _calculate_gain_by_days(
+        close_prices, current_price, shares, days_back=5
+    )
 
     # Handle timezone - match the index timezone if present
     tz = close_prices.index.tz
 
     # 1M: today vs first trading day of current month
     first_of_month = pd.Timestamp(current_date.year, current_date.month, 1, tz=tz)
-    gains['1M'] = _calculate_gain_from_date(close_prices, current_price, shares, first_of_month)
+    gains["1M"] = _calculate_gain_from_date(
+        close_prices, current_price, shares, first_of_month
+    )
 
     # YTD: use added_at date if stock was added after Jan 1, otherwise use Jan 1
     first_of_year = pd.Timestamp(current_date.year, 1, 1, tz=tz)
@@ -560,45 +630,54 @@ def calculate_period_gains(
         added_ts = pd.Timestamp(added_at, tz=tz)
         if added_ts > first_of_year:
             first_of_year = added_ts
-    gains['YTD'] = _calculate_gain_from_date(close_prices, current_price, shares, first_of_year)
+    gains["YTD"] = _calculate_gain_from_date(
+        close_prices, current_price, shares, first_of_year
+    )
 
     return gains
 
 
-def _calculate_gain_by_days(close_prices: pd.Series, current_price: float,
-                            shares: float, days_back: int) -> Dict[str, Optional[float]]:
+def _calculate_gain_by_days(
+    close_prices: pd.Series, current_price: float, shares: float, days_back: int
+) -> Dict[str, Optional[float]]:
     """Calculate gain from N trading days back."""
     if len(close_prices) <= days_back:
-        return {'gain_dollars': None, 'gain_percent': None}
+        return {"gain_dollars": None, "gain_percent": None}
 
     reference_price = float(close_prices.iloc[-(days_back + 1)])
     return _compute_gain_values(current_price, reference_price, shares)
 
 
-def _calculate_gain_from_date(close_prices: pd.Series, current_price: float,
-                              shares: float, reference_date: pd.Timestamp) -> Dict[str, Optional[float]]:
+def _calculate_gain_from_date(
+    close_prices: pd.Series,
+    current_price: float,
+    shares: float,
+    reference_date: pd.Timestamp,
+) -> Dict[str, Optional[float]]:
     """Calculate gain from a specific reference date (finds closest trading day on or after)."""
     available_dates = close_prices.index[close_prices.index >= reference_date]
     if available_dates.empty:
-        return {'gain_dollars': None, 'gain_percent': None}
+        return {"gain_dollars": None, "gain_percent": None}
 
     reference_price = float(close_prices.loc[available_dates[0]])
     return _compute_gain_values(current_price, reference_price, shares)
 
 
-def _compute_gain_values(current_price: float, reference_price: float,
-                         shares: float) -> Dict[str, Optional[float]]:
+def _compute_gain_values(
+    current_price: float, reference_price: float, shares: float
+) -> Dict[str, Optional[float]]:
     """Compute dollar and percentage gains."""
     if reference_price == 0:
-        return {'gain_dollars': None, 'gain_percent': None}
+        return {"gain_dollars": None, "gain_percent": None}
 
     price_change = current_price - reference_price
-    gain_percent = (price_change / reference_price) * 100
+    direction = 1 if shares >= 0 else -1
+    gain_percent = direction * (price_change / reference_price) * 100
     gain_dollars = price_change * shares
 
     return {
-        'gain_dollars': round(gain_dollars, 2),
-        'gain_percent': round(gain_percent, 2)
+        "gain_dollars": round(gain_dollars, 2),
+        "gain_percent": round(gain_percent, 2),
     }
 
 
@@ -614,7 +693,7 @@ def get_year_start_price(hist_data: pd.DataFrame) -> Optional[float]:
     if hist_data is None or hist_data.empty:
         return None
 
-    close_prices = hist_data['close'].dropna()
+    close_prices = hist_data["close"].dropna()
     if close_prices.empty:
         return None
 
@@ -643,45 +722,134 @@ def calculate_portfolio_summary(
     """
     if not positions:
         return {
-            'total_value': 0.0,
-            'day_gain_dollars': 0.0,
-            'day_gain_percent': 0.0,
-            'ytd_unrealized_gain_dollars': 0.0,
-            'ytd_realized_gain_dollars': ytd_realized_gains,
-            'ytd_total_gain_dollars': ytd_realized_gains,
-            'ytd_gain_percent': 0.0
+            "total_value": 0.0,
+            "day_gain_dollars": 0.0,
+            "day_gain_percent": 0.0,
+            "ytd_unrealized_gain_dollars": 0.0,
+            "ytd_realized_gain_dollars": ytd_realized_gains,
+            "ytd_total_gain_dollars": ytd_realized_gains,
+            "ytd_gain_percent": 0.0,
         }
 
-    total_value = sum(p.get('current_value', 0) or 0 for p in positions)
+    total_value = sum(p.get("current_value", 0) or 0 for p in positions)
 
-    day_gain_dollars = sum(
-        p.get('gains', {}).get('1D', {}).get('gain_dollars', 0) or 0
-        for p in positions
-    )
-
+    day_gain_dollars = sum(_position_period_gain(p, "1D") for p in positions)
     ytd_unrealized_gain_dollars = sum(
-        p.get('gains', {}).get('YTD', {}).get('gain_dollars', 0) or 0
-        for p in positions
+        _position_period_gain(p, "YTD") for p in positions
     )
-
     ytd_total_gain_dollars = ytd_unrealized_gain_dollars + ytd_realized_gains
 
-    yesterday_value = total_value - day_gain_dollars
-    ytd_start_value = total_value - ytd_unrealized_gain_dollars
+    # Percentages use gross exposure so short positions don't shrink the base.
+    yesterday_exposure = sum(
+        abs((p.get("current_value") or 0) - _position_period_gain(p, "1D"))
+        for p in positions
+    )
+    ytd_start_exposure = sum(
+        abs((p.get("current_value") or 0) - _position_period_gain(p, "YTD"))
+        for p in positions
+    )
 
-    day_gain_percent = (day_gain_dollars / yesterday_value * 100) if yesterday_value > 0 else 0
-    ytd_gain_percent = (ytd_total_gain_dollars / ytd_start_value * 100) if ytd_start_value > 0 else 0
+    day_gain_percent = (
+        (day_gain_dollars / yesterday_exposure * 100) if yesterday_exposure > 0 else 0
+    )
+    ytd_gain_percent = (
+        (ytd_total_gain_dollars / ytd_start_exposure * 100)
+        if ytd_start_exposure > 0
+        else 0
+    )
 
     return {
-        'total_value': round(total_value, 2),
-        'day_gain_dollars': round(day_gain_dollars, 2),
-        'day_gain_percent': round(day_gain_percent, 2),
-        'ytd_unrealized_gain_dollars': round(ytd_unrealized_gain_dollars, 2),
-        'ytd_realized_gain_dollars': round(ytd_realized_gains, 2),
-        'ytd_total_gain_dollars': round(ytd_total_gain_dollars, 2),
-        'ytd_gain_percent': round(ytd_gain_percent, 2)
+        "total_value": round(total_value, 2),
+        "day_gain_dollars": round(day_gain_dollars, 2),
+        "day_gain_percent": round(day_gain_percent, 2),
+        "ytd_unrealized_gain_dollars": round(ytd_unrealized_gain_dollars, 2),
+        "ytd_realized_gain_dollars": round(ytd_realized_gains, 2),
+        "ytd_total_gain_dollars": round(ytd_total_gain_dollars, 2),
+        "ytd_gain_percent": round(ytd_gain_percent, 2),
     }
 
 
+def _position_period_gain(position: Dict, period: str) -> float:
+    return position.get("gains", {}).get(period, {}).get("gain_dollars", 0) or 0
+
+
+def value_option_position(
+    position: Dict, quote: Optional[Dict[str, float]]
+) -> Dict[str, Any]:
+    """Value an option position from its quote, in the shape calculate_portfolio_summary expects.
+
+    YTD gain is measured from the opening premium, so it overstates the YTD gain of
+    an option opened before Jan 1.
+    """
+    share_equivalent = position["contracts"] * OPTION_CONTRACT_MULTIPLIER
+    premium_per_share = (
+        position["cost_basis"] / abs(share_equivalent) if share_equivalent else 0.0
+    )
+    valued = {
+        **position,
+        "premium_per_share": premium_per_share,
+        "quote": quote,
+        "expired": position["expiry"] < date.today(),
+    }
+
+    if quote is None:
+        no_gain = {"gain_dollars": None, "gain_percent": None}
+        return {
+            **valued,
+            "current_value": None,
+            "unrealized": None,
+            "gains": {"1D": no_gain, "YTD": no_gain},
+        }
+
+    unrealized = (quote["mark"] - premium_per_share) * share_equivalent
+    day_gain = quote["change"] * share_equivalent
+    return {
+        **valued,
+        "current_value": round(quote["mark"] * share_equivalent, 2),
+        "unrealized": round(unrealized, 2),
+        "gains": {
+            "1D": {"gain_dollars": round(day_gain, 2), "gain_percent": None},
+            "YTD": {"gain_dollars": round(unrealized, 2), "gain_percent": None},
+        },
+    }
+
+
+def option_quote_from_chain_row(row: pd.Series) -> Dict[str, float]:
+    """Mark at the bid/ask midpoint, falling back to last trade when either side is missing."""
+    bid = float(row.get("bid") or 0)
+    ask = float(row.get("ask") or 0)
+    last = float(row.get("lastPrice") or 0)
+    mark = (bid + ask) / 2 if bid > 0 and ask > 0 else last
+    return {
+        "mark": round(mark, 4),
+        "bid": bid,
+        "ask": ask,
+        "last": last,
+        "change": float(row.get("change") or 0),
+        "implied_volatility": float(row.get("impliedVolatility") or 0),
+    }
+
+
+def get_option_quote(
+    underlying: str, expiry: date, option_type: str, strike: float
+) -> Optional[Dict[str, float]]:
+    """Fetch a single contract's quote from the yfinance option chain."""
+    metrics_calculator.rate_limiter.wait()
+    try:
+        chain = yf.Ticker(underlying).option_chain(expiry.isoformat())
+    except Exception:
+        logger.exception(f"Could not fetch {underlying} option chain for {expiry}")
+        return None
+
+    contracts = chain.calls if option_type == "call" else chain.puts
+    match = contracts[np.isclose(contracts["strike"], strike)]
+    if match.empty:
+        logger.warning(
+            f"No {underlying} {expiry} {strike} {option_type} in option chain"
+        )
+        return None
+    return option_quote_from_chain_row(match.iloc[0])
+
+
 # Create global metrics calculator instance
-metrics_calculator = StockMetricsCalculator(use_mock_data=False) 
+metrics_calculator = StockMetricsCalculator(use_mock_data=False)

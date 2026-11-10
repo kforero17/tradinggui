@@ -34,6 +34,14 @@
     .risk-cards { display: flex; gap: 1rem; flex-wrap: wrap; margin-bottom: 1.5rem; }
     .risk-card { flex: 1; min-width: 140px; }
     .section-title { color: var(--text-heading); font-size: 1.2rem; margin-bottom: 1rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem; }
+    .side-badge { font-size: 0.75rem; padding: 0.15rem 0.5rem; border-radius: 4px; margin-left: 0.5rem; vertical-align: middle; background-color: var(--bg-card-hover); }
+    .side-badge.short { color: var(--color-negative); }
+    .options-section { margin-top: 2rem; }
+    .options-table-wrap { overflow-x: auto; }
+    .options-table { width: 100%; border-collapse: collapse; }
+    .options-table th, .options-table td { text-align: left; padding: 0.5rem; border-bottom: 1px solid var(--border-color); white-space: nowrap; }
+    .options-table th { color: var(--text-muted); font-weight: normal; font-size: 0.85rem; }
+    .options-table .close-form { display: flex; gap: 0.5rem; align-items: center; }
 </style>
 {% endblock %}
 
@@ -77,8 +85,12 @@
 
 <form action="{{ url_for('add_stock') }}" method="post" class="add-stock-form">
     <input type="text" name="ticker" placeholder="Ticker (e.g., AAPL)">
+    <select name="side" aria-label="Side">
+        <option value="long">Long</option>
+        <option value="short">Short</option>
+    </select>
     <input type="number" name="shares" placeholder="Shares" step="0.01" min="0">
-    <input type="number" name="cost_basis" placeholder="Total Cost ($)" step="0.01" min="0">
+    <input type="number" name="cost_basis" placeholder="Total Cost / Proceeds ($)" step="0.01" min="0">
     <button type="submit">Add Stock</button>
 </form>
 
@@ -86,7 +98,7 @@
     {% for stock in portfolio %}
         <div class="stock-card">
             <div class="stock-header">
-                <h2>{{ stock.ticker }}</h2>
+                <h2>{{ stock.ticker }}{% if stock.shares < 0 %}<span class="side-badge short">SHORT</span>{% endif %}</h2>
                 <a href="{{ url_for('delete_stock', ticker=stock.ticker) }}" class="delete-btn">Remove</a>
             </div>
 
@@ -95,12 +107,13 @@
                     <input type="hidden" name="ticker" value="{{ stock.ticker }}">
                     <label for="shares-{{ stock.ticker }}">Shares:</label>
                     <input type="number" id="shares-{{ stock.ticker }}" name="shares"
-                           value="{{ stock.shares }}" step="0.01" min="0" class="shares-input">
+                           value="{{ stock.shares }}" step="0.01" class="shares-input"
+                           title="Negative for a short position">
                     <button type="submit" class="btn-sm">Update</button>
                 </form>
                 <form action="{{ url_for('update_cost_basis') }}" method="post" class="shares-form">
                     <input type="hidden" name="ticker" value="{{ stock.ticker }}">
-                    <label for="cost-{{ stock.ticker }}">Cost Basis:</label>
+                    <label for="cost-{{ stock.ticker }}">{{ 'Short Proceeds' if stock.shares < 0 else 'Cost Basis' }}:</label>
                     <input type="number" id="cost-{{ stock.ticker }}" name="cost_basis"
                            value="{{ stock.cost_basis or 0 }}" step="0.01" min="0" class="shares-input">
                     <button type="submit" class="btn-sm">Update</button>
@@ -110,19 +123,18 @@
             <div class="position-summary">
                 <div><span class="label">Position Value:</span><span class="value">${{ "{:,.2f}".format(stock.current_value) if stock.current_value else '0.00' }}</span></div>
                 <div><span class="label">Price:</span><span class="value">${{ "%.2f"|format(stock.last_price) if stock.last_price is not none else 'N/A' }}</span></div>
-                <div><span class="label">Cost Basis:</span><span class="value">${{ "{:,.2f}".format(stock.cost_basis) if stock.cost_basis else '0.00' }}</span></div>
-                {% if stock.shares and stock.cost_basis %}
-                {% set unrealized = stock.current_value - stock.cost_basis %}
-                <div><span class="label">Unrealized:</span><span class="value {{ 'positive' if unrealized >= 0 else 'negative' }}">{{ "+" if unrealized >= 0 else "" }}${{ "{:,.2f}".format(unrealized) }}</span></div>
+                <div><span class="label">{{ 'Short Proceeds' if stock.shares < 0 else 'Cost Basis' }}:</span><span class="value">${{ "{:,.2f}".format(stock.cost_basis) if stock.cost_basis else '0.00' }}</span></div>
+                {% if stock.unrealized is not none %}
+                <div><span class="label">Unrealized:</span><span class="value {{ 'positive' if stock.unrealized >= 0 else 'negative' }}">{{ "+" if stock.unrealized >= 0 else "-" }}${{ "{:,.2f}".format(stock.unrealized|abs) }}</span></div>
                 {% endif %}
             </div>
 
             <form action="{{ url_for('sell_stock') }}" method="post" class="sell-form">
                 <input type="hidden" name="ticker" value="{{ stock.ticker }}">
-                <label for="sale-{{ stock.ticker }}">Sale Price/Share:</label>
+                <label for="sale-{{ stock.ticker }}">{{ 'Cover Price/Share' if stock.shares < 0 else 'Sale Price/Share' }}:</label>
                 <input type="number" id="sale-{{ stock.ticker }}" name="sale_price"
                        value="{{ stock.last_price if stock.last_price else '' }}" step="0.01" min="0" class="shares-input" required>
-                <button type="submit" class="btn-sm btn-danger">Sell Position</button>
+                <button type="submit" class="btn-sm btn-danger">{{ 'Cover Short' if stock.shares < 0 else 'Sell Position' }}</button>
             </form>
 
             <table class="gains-table">
@@ -157,8 +169,75 @@
             </div>
         </div>
     {% else %}
+        {% if not options %}
         <p class="empty-message">Your portfolio is empty. Add a stock to get started.</p>
+        {% endif %}
     {% endfor %}
+</div>
+
+<div class="options-section card">
+    <div class="section-title">Options</div>
+    <form action="{{ url_for('add_option') }}" method="post" class="add-stock-form">
+        <input type="text" name="underlying" placeholder="Underlying (e.g., SPCX)" required>
+        <select name="side" aria-label="Side">
+            <option value="long">Buy</option>
+            <option value="short">Write</option>
+        </select>
+        <select name="option_type" aria-label="Option type">
+            <option value="put">Put</option>
+            <option value="call">Call</option>
+        </select>
+        <input type="number" name="strike" placeholder="Strike" step="0.01" min="0" required>
+        <input type="date" name="expiry" aria-label="Expiry" required>
+        <input type="number" name="contracts" placeholder="Contracts" step="1" min="1" required>
+        <input type="number" name="cost_basis" placeholder="Total Premium ($)" step="0.01" min="0">
+        <button type="submit">Add Option</button>
+    </form>
+
+    {% if options %}
+    <div class="options-table-wrap">
+    <table class="options-table">
+        <thead>
+            <tr>
+                <th>Contract</th><th>Contracts</th><th>Premium/Sh</th><th>Mark</th><th>Bid / Ask</th><th>IV</th>
+                <th>Market Value</th><th>Day</th><th>Unrealized</th><th>Close at (per share)</th><th></th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for opt in options %}
+            {% set day = opt.gains['1D'].gain_dollars %}
+            <tr>
+                <td>
+                    {{ opt.underlying }} {{ opt.expiry.strftime('%Y-%m-%d') }} ${{ "%g"|format(opt.strike) }} {{ opt.option_type|upper }}
+                    {% if opt.contracts < 0 %}<span class="side-badge short">WRITTEN</span>{% endif %}
+                </td>
+                <td>{{ "%g"|format(opt.contracts) }}</td>
+                <td>${{ "%.2f"|format(opt.premium_per_share) }}</td>
+                {% if opt.quote %}
+                <td>${{ "%.2f"|format(opt.quote.mark) }}</td>
+                <td>{{ "%.2f"|format(opt.quote.bid) }} / {{ "%.2f"|format(opt.quote.ask) }}</td>
+                <td>{{ "%.1f"|format(opt.quote.implied_volatility * 100) }}%</td>
+                <td>${{ "{:,.2f}".format(opt.current_value) }}</td>
+                <td class="{{ 'positive' if day >= 0 else 'negative' }}">{{ "+" if day >= 0 else "-" }}${{ "{:,.2f}".format(day|abs) }}</td>
+                <td class="{{ 'positive' if opt.unrealized >= 0 else 'negative' }}">{{ "+" if opt.unrealized >= 0 else "-" }}${{ "{:,.2f}".format(opt.unrealized|abs) }}</td>
+                {% else %}
+                <td colspan="6" class="negative">Quote unavailable{{ ' (expired)' if opt.expired else '' }}</td>
+                {% endif %}
+                <td>
+                    <form action="{{ url_for('close_option') }}" method="post" class="close-form">
+                        <input type="hidden" name="position_id" value="{{ opt.id }}">
+                        <input type="number" name="close_price" value="{{ '%.2f'|format(opt.quote.mark) if opt.quote else '0' }}"
+                               step="0.01" min="0" class="shares-input" required>
+                        <button type="submit" class="btn-sm btn-danger">{{ 'Buy to Close' if opt.contracts < 0 else 'Sell to Close' }}</button>
+                    </form>
+                </td>
+                <td><a href="{{ url_for('delete_option', position_id=opt.id) }}" class="delete-btn">Remove</a></td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    {% endif %}
 </div>
 
 <!-- Risk Management Section -->

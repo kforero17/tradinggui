@@ -1,126 +1,37 @@
 {% extends "base.html" %}
 {% block title %}Crypto Trends{% endblock %}
-
 {% block head_extra %}
 <script src="https://cdn.plot.ly/plotly-2.26.0.min.js"></script>
+<style>
+.crypto-controls {display:flex; gap:1rem; flex-wrap:wrap; align-items:end; margin-bottom:1rem}
+.crypto-controls label {display:flex; flex-direction:column; gap:.4rem}
+.crypto-controls input,.crypto-controls select {padding:.6rem; max-width:100%}
+#cryptoChart {min-height:400px} .crypto-select {background:none; color:var(--accent, #00d4aa); border:0; cursor:pointer; padding:0; font:inherit}
+.crypto-selected {background:rgba(0,212,170,.08)}
+</style>
 {% endblock %}
-
 {% block content %}
 <div class="page-header"><h1>Crypto Trends</h1></div>
-
-<div class="filters-container">
-    <div class="filters-row">
-        <div class="filter-group">
-            <label for="volumeSlider">Minimum 24h Volume (USD)</label>
-            <div class="slider-container">
-                <input type="range" id="volumeSlider" min="0" max="100" value="{{ (min_volume / 1e6) | round(0) }}" step="1">
-                <span class="slider-value" id="volumeValue">${{ (min_volume / 1e6) | round(0) }}M</span>
-            </div>
-        </div>
-        <button onclick="applyFilters()">Apply Filters</button>
+<p class="text-muted">Crypto.com spot markets · USD quotes refresh every minute · Charts refresh every 5 minutes</p>
+<p id="feedStatus" role="status" aria-live="polite">Connecting to market feed…</p>
+<div class="crypto-controls">
+    <label>Search coins<input id="cryptoSearch" type="search" placeholder="BTC, ETH, SOL…"></label>
+    <label>Minimum 24h volume (USD)<input id="minVolume" type="number" min="0" step="1000000" value="0"></label>
+    <label>Sort by<select id="cryptoSort"><option value="volume_24h">Volume</option><option value="price_change_24h">Biggest gainers</option><option value="losers">Biggest losers</option><option value="instrument">Symbol</option></select></label>
+    <button id="refreshQuotes" type="button">Refresh view</button>
+</div>
+<div class="chart-container">
+    <div class="crypto-controls">
+        <h2 id="chartTitle">Price chart</h2>
+        <label>Candle interval<select id="chartTimeframe"><option value="1D">Daily · 180 candles</option><option value="1h">Hourly · 180 candles</option></select></label>
     </div>
+    <p id="chartStatus" role="status">Select a market below to explore its price, MA50 and EMA50.</p>
+    <div id="cryptoChart"></div>
 </div>
-
-<div class="text-center text-muted" style="margin-bottom: 1.5rem;">
-    Showing {{ total_count }} crypto instruments{% if min_volume > 0 %} with 24h volume &ge; ${{ (min_volume / 1e6) | round(1) }}M{% endif %}
-</div>
-
-<div class="data-table">
-    <table>
-        <thead>
-            <tr>
-                <th>Instrument</th>
-                <th>Last Price</th>
-                <th>24h Change</th>
-                <th>% Above MA50</th>
-                <th>% Above EMA50</th>
-                <th>24h Volume</th>
-                <th>24h High</th>
-                <th>24h Low</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for crypto in instruments %}
-                <tr>
-                    <td class="ticker-cell" onclick="showCryptoModal('{{ crypto.instrument }}')">{{ crypto.instrument }}</td>
-                    <td>${{ "%.2f"|format(crypto.last_price) if crypto.last_price is not none else 'N/A' }}</td>
-                    <td class="{{ 'positive' if crypto.price_change_24h and crypto.price_change_24h > 0 else 'negative' }}">
-                        {{ "%.2f"|format(crypto.price_change_24h) if crypto.price_change_24h is not none else 'N/A' }}%
-                    </td>
-                    <td class="{{ 'positive' if crypto.pct_above_ma_50 and crypto.pct_above_ma_50 > 0 else 'negative' }}">
-                        {{ "%.2f"|format(crypto.pct_above_ma_50) if crypto.pct_above_ma_50 is not none else 'N/A' }}%
-                    </td>
-                    <td class="{{ 'positive' if crypto.pct_above_ema_50 and crypto.pct_above_ema_50 > 0 else 'negative' }}">
-                        {{ "%.2f"|format(crypto.pct_above_ema_50) if crypto.pct_above_ema_50 is not none else 'N/A' }}%
-                    </td>
-                    <td>${{ "{:,.0f}".format(crypto.volume_24h) if crypto.volume_24h is not none else 'N/A' }}</td>
-                    <td>${{ "%.2f"|format(crypto.high_24h) if crypto.high_24h is not none else 'N/A' }}</td>
-                    <td>${{ "%.2f"|format(crypto.low_24h) if crypto.low_24h is not none else 'N/A' }}</td>
-                </tr>
-            {% else %}
-                <tr><td colspan="8" class="text-center text-muted" style="padding: 2rem;">No crypto data available. Use the MCP tools to fetch data first.</td></tr>
-            {% endfor %}
-        </tbody>
-    </table>
-</div>
-
-<!-- Modal for Crypto Details -->
-<div id="cryptoModal" class="modal">
-    <div class="modal-content">
-        <span class="close" onclick="closeModal('cryptoModal')">&times;</span>
-        <h2 class="modal-title" id="modalTitle">Crypto Details</h2>
-        <div id="modalContent" class="loading">Loading...</div>
-    </div>
-</div>
+<p id="cryptoCount" class="text-muted"></p>
+<div class="data-table"><table>
+<thead><tr><th>Market / chart</th><th>Last price</th><th>24h change</th><th>24h volume (USD)</th><th>24h high</th><th>24h low</th><th>Quote received</th></tr></thead>
+<tbody id="cryptoRows"><tr><td colspan="7">Loading markets…</td></tr></tbody>
+</table></div>
 {% endblock %}
-
-{% block scripts %}
-<script>
-    document.getElementById('volumeSlider').addEventListener('input', function() {
-        document.getElementById('volumeValue').textContent = '$' + this.value + 'M';
-    });
-
-    function applyFilters() {
-        var volume = document.getElementById('volumeSlider').value * 1e6;
-        var url = new URL(window.location);
-        url.searchParams.set('min_volume', volume);
-        window.location.href = url.toString();
-    }
-
-    function showCryptoModal(instrument) {
-        document.getElementById('modalTitle').textContent = instrument + ' Details';
-        showLoading('modalContent');
-        openModal('cryptoModal');
-
-        fetch('/get_crypto_plot/' + instrument)
-            .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
-            .then(function(data) {
-                if (!data.success) { document.getElementById('modalContent').innerHTML = '<p class="negative">Error: ' + (data.error || 'Unknown') + '</p>'; return; }
-
-                var html = '';
-                if (data.metrics) {
-                    html += '<div class="metrics-grid">';
-                    html += buildMetricCard('Last Price', formatCurrency(data.metrics.last_price));
-                    html += buildMetricCard('24h Change', formatValue(data.metrics.price_change_24h, '%'), colorClass(data.metrics.price_change_24h));
-                    html += buildMetricCard('% Above MA50', formatValue(data.metrics.pct_above_ma_50, '%'), colorClass(data.metrics.pct_above_ma_50));
-                    html += buildMetricCard('% Above EMA50', formatValue(data.metrics.pct_above_ema_50, '%'), colorClass(data.metrics.pct_above_ema_50));
-                    html += buildMetricCard('24h Volume', formatVolume(data.metrics.volume_24h));
-                    html += buildMetricCard('24h High', formatCurrency(data.metrics.high_24h));
-                    html += buildMetricCard('24h Low', formatCurrency(data.metrics.low_24h));
-                    html += buildMetricCard('Timeframe', data.metrics.timeframe || 'N/A');
-                    html += '</div>';
-                }
-                html += '<div class="chart-container"><div id="cryptoChart"></div></div>';
-                document.getElementById('modalContent').innerHTML = html;
-
-                if (data.plot_data) {
-                    var plotData = JSON.parse(data.plot_data);
-                    Plotly.newPlot('cryptoChart', plotData.data, plotData.layout, {displayModeBar: true, responsive: true});
-                }
-            })
-            .catch(function(err) {
-                document.getElementById('modalContent').innerHTML = '<p class="negative">Error loading data: ' + err.message + '</p>';
-            });
-    }
-</script>
-{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='js/crypto.js') }}"></script>{% endblock %}
