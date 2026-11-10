@@ -1,0 +1,11 @@
+Symbol|Security Name|Market Category|Test Issue|Financial Status|Round Lot Size|ETF|NextShares
+AACIU|Armada Acquisition Corp. III - Units|G|N|N|100|N|N
+AACIW|Armada Acquisition Corp. III - Warrant|G|N|N|100|N|N
+AACPR|Apogee Acquisition Corp - Rights|G|N|N|100|N|N
+AAPL|Apple Inc. - Common Stock|Q|N|N|40|N|N
+ARLP|Alliance Resource Partners, L.P. - Common Units Representing Limited Partnership Interests|Q|N|N|100|N|N
+MSFT|Microsoft Corporation - Common Stock|Q|N|N|40|N|N
+NA|Nano Labs Ltd - Class A Ordinary Shares|G|N|N|100|N|N
+QQQ|Invesco QQQ Trust, Series 1|G|N|N|40|Y|N
+ZAZZT|Tick Pilot Test Stock Class A Common Stock|G|Y|N|100|N|N
+File Creation Time: 1110202611:01|||||||
