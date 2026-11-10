@@ -1,6 +1,6 @@
 # TradingGui
 
-Personal trading dashboard combining stock screening, portfolio tracking, and crypto trend analysis in a Flask web app backed by SQLite.
+Personal trading dashboard combining trend-following recommendations (long and short), multi-account portfolio tracking, stock screening and crypto trend analysis in a Flask web app backed by SQLite. Scheduled jobs refresh the data weekly and re-check positions every weekday, and send a digest.
 
 ## Architecture
 
@@ -9,32 +9,84 @@ Personal trading dashboard combining stock screening, portfolio tracking, and cr
                          │   Flask Web App       │
                          │   http://127.0.0.1:8051│
                          │                       │
-                         │  /          Portfolio  │
-                         │  /research  Stock Lookup│
-                         │  /momentum  Screener   │
-                         │  /crypto    Crypto Trends│
+                         │  /          Today      │
+                         │  /portfolio Portfolio  │
+                         │  /trend     Trend      │
+                         │  /review    Trade Review│
+                         │  ...        (see Tabs) │
                          └────────┬──────────────┘
                                   │
               ┌───────────────────┼───────────────────┐
               │                   │                     │
      ┌────────▼────────┐ ┌───────▼────────┐  ┌────────▼────────┐
      │  yfinance        │ │  SQLite DB     │  │  MCP Crypto     │
-     │  (live quotes +  │ │  (persistence) │  │  (Claude-driven │
-     │   400d history)  │ │                │  │   data ingest)  │
+     │  (bars, quotes,  │ │  (persistence) │  │  (Claude-driven │
+     │   fundamentals)  │ │                │  │   data ingest)  │
      └─────────────────┘ └────────────────┘  └─────────────────┘
+              ▲                   ▲
+              └──── python -m src.jobs weekly|daily (launchd) ────┘
 ```
 
+## Jobs
+
+Two scheduled jobs share an exclusive file lock (`data/.job.lock`), so they never overlap. The Today page's **Recheck holdings** button takes the same lock and answers "A scheduled job is running; try again shortly" while a job runs.
+
+```bash
+# Weekly: universe files -> bars and technicals -> rotating fundamentals -> alerts
+#         -> recommendations with an entry scan -> digest (always notifies)
+.venv/bin/python -m src.jobs weekly [--tickers A,B | --limit N] [--no-notify]
+
+# Weekday: holdings and the latest ENTER/WATCH list on refreshed bars -> digest
+.venv/bin/python -m src.jobs daily [--no-notify]
+
+# Legacy entry point: the full weekly job
+.venv/bin/python -m src.main
+```
+
+- **weekly** refreshes the universe CSVs, updates the bar cache and technical metrics for the universe plus holdings in batches of 500, fetches the fundamentals that are due, evaluates alerts, stores a recommendation run that scans for new entries, then writes the HTML digest and sends it.
+- `--tickers A,B` or `--limit N` (mutually exclusive) make a smoke run on a subset, plus holdings: the universe-file refresh is skipped and only the subset (plus holdings and the watchlist) is scanned for entries.
+- **daily** stores a run that re-evaluates positions (stops, channel exits, add-on units) and the latest ENTER/WATCH rows on freshly downloaded bars. The report is always written; it notifies only when something is actionable: an EXIT_STOP, EXIT_CHANNEL or ADD_UNIT row, or an ENTER that is new since the previous run. Rows already marked Taken or Skipped in the journal don't notify; undecided exits keep notifying every day.
+- `--no-notify` writes the report but skips notifications.
+
+Exit codes for `python -m src.jobs`: `0` success, `1` error, `2` another job holds the lock (argparse also uses `2` for bad arguments). `python -m src.main` exits `1` on missing ticker files, a held lock or an error.
+
+### Notifications
+
+The digest goes to `data/reports/digest_<job>_<YYYY-MM-DD>.html`, a macOS notification (`osascript`) and, if `SLACK_WEBHOOK_URL` is set, a Slack webhook. Delivery is best-effort: a failed channel is logged and doesn't fail the job.
+
+## Scheduling (macOS launchd)
+
+```bash
+scripts/install_launchd.sh              # install or reinstall both LaunchAgents
+scripts/install_launchd.sh --uninstall  # remove them
+```
+
+The script needs `.venv/bin/python`. It fills the repo path into the templates in `deploy/launchd/` and bootstraps them into `~/Library/LaunchAgents`:
+
+| Label | Schedule (local time) | Command |
+|---|---|---|
+| `com.tradinggui.weekly` | Saturday 06:00 | `python -m src.jobs weekly` |
+| `com.tradinggui.daily` | Monday to Friday 16:30 | `python -m src.jobs daily` |
+
+A run missed while the Mac sleeps starts on wake. Logs go to `logs/weekly.out.log`, `logs/weekly.err.log`, `logs/daily.out.log`, `logs/daily.err.log`, and `logs/trading.log` (rotated daily, kept 7 days).
+
+```bash
+launchctl print gui/$(id -u)/com.tradinggui.weekly | grep -E 'state|last exit|runs'
+launchctl print gui/$(id -u)/com.tradinggui.daily | grep -E 'state|last exit|runs'
+launchctl kickstart -k gui/$(id -u)/com.tradinggui.daily   # run one now
+```
+
+## Data
+
+- **Universe**: the weekly job downloads all US listings from the NASDAQ Trader symbol directory (`nasdaqlisted.txt` and `otherlisted.txt`) into `data/raw/us_listed.csv`, and the S&P 500 members from Wikipedia into `data/raw/sp500.csv`. A failed download, or fewer rows than `UNIVERSE_MIN_LISTED_ROWS` / `UNIVERSE_MIN_SP500_ROWS`, keeps the previous file. ETFs are included (`UNIVERSE_INCLUDE_ETFS`). Until the first refresh, the legacy `data/raw/nasdaq.csv` is used instead of `us_listed.csv`.
+- **Recommendation universe**: liquid listings (last price at least `UNIVERSE_MIN_PRICE`, 50-day average dollar volume at least `UNIVERSE_MIN_DOLLAR_VOLUME`) plus holdings and the Trend watchlist. Leveraged and inverse ETFs are excluded by name (`UNIVERSE_EXCLUDE_LEVERAGED_ETFS`), because their daily reset breaks long-run trend rules.
+- **Bar cache**: split-adjusted daily OHLC per ticker in `data/cache/ohlc/<TICKER>.csv`. The first download goes back to 2015-01-01; later runs download only the bars after the last cached one, 100 tickers per `yf.download` call. A new split re-downloads that ticker's full history.
+- **Fundamentals** (`yfinance` `.info`) rotate instead of being fetched every run: holdings always, plus liquid non-ETF stocks whose last fetch is `FUNDAMENTALS_MAX_AGE_DAYS` or more days old, oldest first, at most `FUNDAMENTALS_MAX_PER_RUN` per run (holdings are never cut). The rest is deferred to later runs.
+- **Dead-ticker skip list**: a ticker that fails `TICKER_MAX_CONSECUTIVE_FAILURES` runs in a row (no bars, stale bars or too little history) is skipped for `TICKER_SKIP_DAYS` days, then retried. Holdings are never skipped. Outcomes are in the `ticker_status` table.
+- **Database**: `data/processed/stock_metrics_v2.db`. The migration that added accounts first wrote a backup to `data/processed/stock_metrics_v2.db.pre-accounts.bak`.
+- **Reports**: HTML digests in `data/reports/`.
+
 ## Data Pipeline
-
-### Stock Data (batch)
-
-Run `python -m src.main` to populate the database:
-
-1. `TickerLoader` reads and deduplicates tickers from S&P 500 and NASDAQ CSVs
-2. Tickers are batched (50 per group), each checked for freshness (skip if updated within 1 day)
-3. `StockMetricsCalculator` fetches 400 days of daily OHLCV via `yfinance` (fallback: `stockdex`) plus fundamentals from `yfinance.Ticker.info`
-4. Momentum + valuation metrics are calculated and upserted into SQLite
-5. Rate limited to 0.5 req/s with exponential backoff retries (3 workers max)
 
 ### Crypto Data (Claude-driven)
 
@@ -51,11 +103,11 @@ Managed interactively through the web UI. Users add long or short stock position
 
 ## Data Model
 
-SQLite database at `data/processed/stock_metrics.db` with these tables:
+SQLite database at `data/processed/stock_metrics_v2.db`. The main tables are below. The trend-following tables are `accounts` (name, equity, cash, `allow_short`), `recommendation_runs` and `recommendations` (one stored run per job, with its rows), `signal_decisions` (the journal: taken, skipped or pending per `signal_key` and `first_seen_at`), `trend_watchlist`, `ticker_status` (the skip list), `broker_fills` (Trade Review imports) and `alerts`.
 
 ### `valuation_momentum`
 
-Per-ticker stock metrics (one row per ticker, upserted on refresh):
+Per-ticker stock metrics (one row per ticker, upserted on refresh). Among the columns:
 
 | Column | Description |
 |---|---|
@@ -72,6 +124,7 @@ Per-ticker stock metrics (one row per ticker, upserted on refresh):
 
 | Column | Description |
 |---|---|
+| `account` (PK) | Account name (`accounts.name`) |
 | `ticker` (PK) | Symbol |
 | `shares` | Quantity held; negative for a short |
 | `cost_basis` | Total cost, or total short-sale proceeds for a short (not per-share) |
@@ -116,7 +169,7 @@ Per-ticker stock metrics (one row per ticker, upserted on refresh):
 
 ### Stock Momentum
 
-From 400 days of daily closes (minimum 100 data points required):
+From daily closes (the jobs use the cached bars; minimum 100 bars required):
 
 - **MA-100**: Simple rolling mean over last 100 closes
 - **EMA-100**: Exponential weighted mean (span=100)
@@ -156,14 +209,21 @@ From MCP `get_candlestick` (max 50 candles) + `get_ticker`:
 
 Start with `python run_web_app.py` (default: `http://127.0.0.1:8051`).
 
-### Pages
+### Tabs
 
-| Route | Page | Description |
+| Route | Tab | Description |
 |---|---|---|
-| `/` | Portfolio | All holdings with period gains (1D/1W/1M/YTD), Plotly price charts, summary totals. Add/sell/cover/update stock positions; add/close option positions. |
+| `/` | Today | Home page, read from the latest stored run: the action list (exits, add-ons, entries, watch) with copyable order tickets, open risk against the heat budget, the market regime (benchmark vs its 200-day average, breadth), the signal journal (Taken / Skip per row), expired signals, the Accounts editor and **Recheck holdings**. Filters by direction, asset type and account. |
+| `/portfolio` | Portfolio | Holdings grouped by account, with period gains (1D/1W/1M/YTD), Plotly price charts and summary totals. Add/sell/cover/update stock positions; add/close option positions. |
 | `/research` | Research | Single-stock lookup. Searches DB first, falls back to live yfinance fetch. Shows chart + metrics. |
-| `/momentum` | Momentum | Screener table filterable by market cap and % above MA-100. Click for chart modal. |
+| `/momentum` | Momentum | Screener table filterable by market cap and % above MA-100, with a bearish view. Click for chart modal. |
+| `/trend` | Trend | Turtle rules (System 1 or 2) for open positions, long and short, plus watchlist breakouts and a watchlist backtest since 2015. |
+| `/review` | Trade Review | Import E*TRADE and Fidelity exports; closed trades are FIFO-matched per account and replayed under the Turtle rules, with discipline checks. |
 | `/crypto` | Crypto | Crypto trends table filterable by 24h volume. Shows MA/EMA deviation and 24h stats. |
+| `/analytics` | Analytics | Market heatmap, breadth and movers. |
+| `/risk` | Risk | Portfolio risk dashboard (long stock positions). |
+| `/screener` | Screener | Cached quant screener results. |
+| `/alerts` | Alerts | Create, dismiss and delete alerts (price above/below, RSI, MACD crossover, % change); the weekly job evaluates them. |
 
 ### API Endpoints
 
@@ -179,13 +239,20 @@ Charts use Plotly (`plotly_dark` theme). Portfolio/research charts are rendered 
 ## Setup
 
 ```bash
-python -m venv venv
-source venv/bin/activate
+python -m venv .venv   # the launchd script expects .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env  # configure settings
 ```
 
 For corporate proxy environments, set `DISABLE_SSL_VERIFY=true` in `.env`.
+
+### First-time setup
+
+1. Start the web app and open **Today → Accounts**. Create one account per brokerage account and enter its equity and cash: for example a Roth IRA with **Allow short** off and a taxable account with it on. Sizing and the heat budget use the total equity across accounts.
+2. The DB seeds a `default` account (`DEFAULT_ACCOUNT`) that **allows shorts**, so existing positions have a home. Rename it to one of your real accounts (its positions move with it), or delete it once it holds no positions.
+3. Run one full weekly job to warm the cache: `.venv/bin/python -m src.jobs weekly --no-notify`. The first run downloads daily history since 2015 for every ticker in the universe, so it takes much longer than later runs.
+4. Install the schedule: `scripts/install_launchd.sh`.
 
 ## Usage
 
@@ -193,8 +260,9 @@ For corporate proxy environments, set `DISABLE_SSL_VERIFY=true` in `.env`.
 # Start the web dashboard
 python run_web_app.py
 
-# Batch-refresh stock data (S&P 500 + NASDAQ)
-python -m src.main
+# Run the jobs by hand (see Jobs)
+python -m src.jobs weekly
+python -m src.jobs daily
 
 # Check crypto DB status
 python refresh_crypto.py
@@ -209,7 +277,7 @@ Settings are managed via `pydantic-settings` and can be overridden in `.env`:
 
 | Variable | Default | Description |
 |---|---|---|
-| `DB_PATH` | `data/processed/stock_metrics.db` | SQLite path |
+| `DB_PATH` | `data/processed/stock_metrics_v2.db` | SQLite path |
 | `HISTORICAL_LOOKBACK_DAYS` | `400` | Days of stock history to fetch |
 | `RECENT_DATA_AGE_LIMIT_DAYS` | `1` | Stock freshness threshold |
 | `MAX_CONCURRENT_WORKERS` | `3` | Parallel fetch workers |
@@ -221,6 +289,29 @@ Settings are managed via `pydantic-settings` and can be overridden in `.env`:
 | `WEB_APP_PORT` | `8051` | Flask port |
 | `DISABLE_SSL_VERIFY` | `false` | Bypass SSL (for corporate proxies) |
 | `FLASK_SECRET_KEY` | auto-generated | Session secret key |
+
+Trend-following and job settings (`src/config/settings.py`, also overridable in `.env`):
+
+| Variable | Default | Description |
+|---|---|---|
+| `UNIVERSE_INCLUDE_ETFS` | `true` | Keep ETFs in the universe |
+| `UNIVERSE_MIN_PRICE` | `5.0` | Minimum last price to be liquid |
+| `UNIVERSE_MIN_DOLLAR_VOLUME` | `10000000` | Minimum 50-day average dollar volume |
+| `UNIVERSE_EXCLUDE_LEVERAGED_ETFS` | `true` | Drop leveraged and inverse ETFs from recommendations |
+| `UNIVERSE_MIN_LISTED_ROWS` / `UNIVERSE_MIN_SP500_ROWS` | `5000` / `490` | Sanity floors for the universe refresh |
+| `TREND_SYSTEM` | `S2` | Turtle system: `S1` (20-day breakouts, 10-day exits) or `S2` (55-day, 20-day) |
+| `TREND_RISK_PER_UNIT` | `0.005` | Equity risked per unit (0.5%) |
+| `TREND_MAX_UNIT_FRACTION` | `0.10` | Cap on one unit's value as a fraction of equity |
+| `MAX_PORTFOLIO_HEAT_PCT` | `0.10` | Heat budget: total open risk as a fraction of equity |
+| `MAX_WATCH_ROWS` | `30` | WATCH rows shown on Today (ENTER rows are never capped) |
+| `REGIME_BENCHMARK` | `SPY` | Benchmark for the market regime |
+| `FUNDAMENTALS_MAX_AGE_DAYS` | `28` | Refetch fundamentals older than this |
+| `FUNDAMENTALS_MAX_PER_RUN` | `1000` | Fundamentals fetched per run, beyond holdings |
+| `FUNDAMENTALS_REQUESTS_PER_SECOND` | `1.0` | Rate limit for `.info` calls |
+| `DOWNLOAD_CHUNK_SIZE` | `100` | Tickers per batched bar download |
+| `TICKER_MAX_CONSECUTIVE_FAILURES` / `TICKER_SKIP_DAYS` | `3` / `28` | Skip-list threshold and duration |
+| `DEFAULT_ACCOUNT` | `default` | Name of the seeded account |
+| `SLACK_WEBHOOK_URL` | unset | Slack incoming webhook for the digest (set in the environment or `.env`) |
 
 ## Dependencies
 
