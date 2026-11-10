@@ -74,6 +74,21 @@ def live_pages(monkeypatch):
     return pages
 
 
+@pytest.mark.parametrize("disable, verify", [("true", False), ("false", True)])
+def test_fetch_text_follows_disable_ssl_verify(monkeypatch, disable, verify):
+    # requests ignores the global ssl override, so behind the corporate proxy
+    # the S&P download failed with CERTIFICATE_VERIFY_FAILED until verify was passed.
+    calls = []
+    monkeypatch.setenv("DISABLE_SSL_VERIFY", disable)
+    monkeypatch.setattr(
+        universe_sources.requests,
+        "get",
+        lambda url, **kw: calls.append(kw) or _Response("ok"),
+    )
+    assert universe_sources._fetch_text(SP500_URL) == "ok"
+    assert calls[0]["verify"] is verify
+
+
 def test_to_yfinance_symbol_maps_class_dots_to_dashes():
     assert to_yfinance_symbol(" brk.b ") == "BRK-B"
     assert to_yfinance_symbol("AAPL") == "AAPL"

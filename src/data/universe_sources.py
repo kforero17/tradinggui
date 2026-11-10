@@ -18,6 +18,7 @@ import pandas as pd
 import requests
 from loguru import logger
 
+from ..config.security import security_config
 from ..config.settings import settings
 
 __all__ = [
@@ -173,8 +174,13 @@ def parse_sp500_html(html: str) -> pd.DataFrame:
 
 
 def _fetch_text(url: str) -> str:
+    # requests does not honor the global ssl context override used by
+    # configure_ssl_verification; pass the existing app setting explicitly.
     response = requests.get(
-        url, headers=REQUEST_HEADERS, timeout=REQUEST_TIMEOUT_SECONDS
+        url,
+        headers=REQUEST_HEADERS,
+        timeout=REQUEST_TIMEOUT_SECONDS,
+        verify=not security_config.should_disable_ssl(),
     )
     response.raise_for_status()
     return response.text

@@ -22,6 +22,7 @@ import requests
 from jinja2 import Environment, FileSystemLoader, Undefined, select_autoescape
 from loguru import logger
 
+from ..config.security import security_config
 from ..config.settings import settings
 
 __all__ = [
@@ -306,7 +307,14 @@ def notify_slack(text: str) -> bool:
     if not url:
         return False
     try:
-        response = requests.post(url, json={"text": text}, timeout=NOTIFY_TIMEOUT_S)
+        # requests ignores the global ssl override; behind the corporate proxy
+        # the webhook needs the app's DISABLE_SSL_VERIFY setting passed in.
+        response = requests.post(
+            url,
+            json={"text": text},
+            timeout=NOTIFY_TIMEOUT_S,
+            verify=not security_config.should_disable_ssl(),
+        )
         response.raise_for_status()
     except requests.RequestException as e:
         # The message of an HTTPError contains the URL, which is the webhook secret.

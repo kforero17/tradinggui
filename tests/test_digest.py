@@ -297,6 +297,18 @@ def test_notify_slack_only_when_the_url_is_set(monkeypatch):
     assert posts[0][1]["json"] == {"text": "hello"} and posts[0][1]["timeout"]
 
 
+@pytest.mark.parametrize("disable, verify", [("true", False), ("false", True)])
+def test_notify_slack_follows_disable_ssl_verify(monkeypatch, disable, verify):
+    posts = []
+    monkeypatch.setenv("DISABLE_SSL_VERIFY", disable)
+    monkeypatch.setattr(settings, "SLACK_WEBHOOK_URL", "https://hooks.slack.com/x")
+    monkeypatch.setattr(
+        digest_mod.requests, "post", lambda url, **kw: posts.append(kw) or _Response()
+    )
+    assert digest_mod.notify_slack("hello") is True
+    assert posts[0]["verify"] is verify
+
+
 @pytest.mark.parametrize(
     "post",
     [
