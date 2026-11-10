@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ title }}</title>
+<style>
+  :root {
+    --bg: #121212; --card: #1e1e1e; --header: #2a2a2a; --border: #333;
+    --text: #e0e0e0; --heading: #fff; --muted: #aaa; --accent: #00D4AA;
+    --pos: #28a745; --neg: #dc3545; --warn: #ffc107; --info: #17a2b8;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+  .wrap { max-width: 1200px; margin: 0 auto; padding: 16px; }
+  h1 { color: var(--accent); font-size: 1.4rem; margin: 0 0 4px; }
+  h2 { color: var(--heading); font-size: 1.05rem; margin: 24px 0 8px; padding-left: 8px;
+    border-left: 3px solid var(--accent); }
+  h2.exits { border-color: var(--neg); color: #ff8a95; }
+  h2.adds { border-color: var(--info); }
+  h2.entries { border-color: var(--pos); }
+  .muted { color: var(--muted); }
+  .summary { font-size: 1rem; margin: 8px 0 0; }
+  .cards { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 16px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 6px;
+    padding: 10px 14px; min-width: 160px; flex: 1 1 160px; }
+  .card .label { color: var(--muted); font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; }
+  .card .value { color: var(--heading); font-size: 1.2rem; font-weight: 600; }
+  .scroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--border); }
+  th, td { padding: 6px 8px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; white-space: nowrap; }
+  th { background: var(--header); color: var(--muted); font-weight: 600; font-size: .8rem; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td.wrap { white-space: normal; min-width: 200px; }
+  tr.exit td { background: rgba(220, 53, 69, .10); }
+  .ticker { color: var(--heading); font-weight: 700; }
+  .badge { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: .72rem; font-weight: 700;
+    margin-left: 4px; vertical-align: middle; }
+  .b-new { background: var(--accent); color: #000; }
+  .b-borrow { background: var(--warn); color: #000; }
+  .b-late { background: #6c757d; color: #fff; }
+  .b-blocked { background: var(--neg); color: #fff; }
+  .b-long { color: var(--pos); border: 1px solid var(--pos); }
+  .b-short { color: #ff8a95; border: 1px solid var(--neg); }
+  .blocked { color: #ff8a95; font-size: .8rem; }
+  .note { color: var(--warn); font-size: .8rem; }
+  .empty { color: var(--muted); font-style: italic; padding: 4px 8px; }
+  .risk-on { color: var(--pos); } .risk-off { color: var(--neg); } .mixed { color: var(--warn); }
+  footer { color: var(--muted); font-size: .75rem; margin-top: 32px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+{% macro dir_badge(row) %}<span class="badge {{ 'b-long' if row.direction == 'LONG' else 'b-short' }}">{{ row.direction }}</span>{% endmacro %}
+{% macro flags(row) %}
+{% if row.status == 'NEW' %}<span class="badge b-new">NEW</span>{% endif %}
+{% if row.extra and row.extra.check_borrow %}<span class="badge b-borrow">CHECK BORROW</span>{% endif %}
+{% if row.is_late %}<span class="badge b-late">LATE</span>{% endif %}
+{% endmacro %}
+{% macro notes(row) %}
+{% if row.blocked_by %}<div class="blocked">Blocked: {{ row.blocked_by | join('; ') }}</div>{% endif %}
+{% if row.reasons %}<div class="muted">{{ row.reasons | join(' · ') }}</div>{% endif %}
+{% if row.decision %}<div class="note">{{ row.decision.status }}{% if row.decision.note %}: {{ row.decision.note }}{% endif %}</div>{% endif %}
+{% endmacro %}
+
+  <h1>{{ title }}</h1>
+  <div class="muted">
+    Generated {{ generated_at }}
+    {% if run %} · run #{{ run.id }} ({{ run.job }}) at {{ run.run_at }} UTC{% endif %}
+    {% if entries_run and entries_run.id != run.id %} · entries from run #{{ entries_run.id }} ({{ entries_run.job }}) at {{ entries_run.run_at }} UTC{% endif %}
+  </div>
+  <p class="summary">{{ summary_line }}</p>
+
+  <div class="cards">
+    <div class="card"><div class="label">Equity</div><div class="value">{{ heat.equity | money if heat else '–' }}</div></div>
+    <div class="card"><div class="label">Open risk</div><div class="value">{{ heat.open_risk_pct | pct if heat else '–' }}</div></div>
+    <div class="card"><div class="label">Heat after planned</div><div class="value">{{ heat.heat_after_planned_pct | pct if heat else '–' }}</div>
+      <div class="muted">budget {{ heat.budget_pct | pct if heat else '–' }}</div></div>
+    <div class="card"><div class="label">Regime</div><div class="value {{ regime.label | replace('_', '-') }}">{{ (regime.label or 'unknown') | replace('_', ' ') }}</div></div>
+  </div>
+
+  <h2 class="exits">Exits ({{ exits | length }})</h2>
+  {% if exits %}
+  <div class="scroll"><table>
+    <tr><th>Ticker</th><th>Account</th><th>Action</th><th>Order</th><th class="num">Shares</th><th class="num">Trigger</th><th class="num">Stop</th><th class="num">Last</th><th>Notes</th></tr>
+    {% for r in exits %}
+    <tr class="exit">
+      <td><span class="ticker">{{ r.ticker }}</span> {{ dir_badge(r) }}{{ flags(r) }}</td>
+      <td>{{ r.account or '' }}</td>
+      <td>{{ r.action | replace('_', ' ') }}</td>
+      <td>{{ r.extra.order_type or '' }}</td>
+      <td class="num">{{ r.shares | num }}</td>
+      <td class="num">{{ r.trigger_price | price }}</td>
+      <td class="num">{{ r.stop_price | price }}</td>
+      <td class="num">{{ r.extra.last_close | price }}</td>
+      <td class="wrap">{{ notes(r) }}</td>
+    </tr>
+    {% endfor %}
+  </table></div>
+  {% else %}<div class="empty">No exits.</div>{% endif %}
+
+  <h2 class="adds">Adds ({{ adds | length }})</h2>
+  {% if adds %}
+  <div class="scroll"><table>
+    <tr><th>Ticker</th><th>Account</th><th>Order</th><th class="num">Shares</th><th class="num">Add level</th><th class="num">Stop</th><th class="num">$ Risk</th><th class="num">Units held</th><th>Notes</th></tr>
+    {% for r in adds %}
+    <tr>
+      <td><span class="ticker">{{ r.ticker }}</span> {{ dir_badge(r) }}{{ flags(r) }}{% if r.blocked_by %}<span class="badge b-blocked">BLOCKED</span>{% endif %}</td>
+      <td>{{ r.account or '' }}</td>
+      <td>{{ r.extra.order_type or '' }}</td>
+      <td class="num">{{ r.shares | num }}</td>
+      <td class="num">{{ r.trigger_price | price }}</td>
+      <td class="num">{{ r.stop_price | price }}</td>
+      <td class="num">{{ r.risk_dollars | money }}</td>
+      <td class="num">{{ r.extra.units_held | num(1) }}</td>
+      <td class="wrap">{{ notes(r) }}</td>
+    </tr>
+    {% endfor %}
+  </table></div>
+  {% else %}<div class="empty">No adds.</div>{% endif %}
+
+  <h2 class="entries">New entries ({{ entries | length }})</h2>
+  {% if entries %}
+  <div class="scroll"><table>
+    <tr><th>Ticker</th><th>Account</th><th>Order</th><th class="num">Entry</th><th class="num">Shares</th><th class="num">Stop</th><th class="num">$ Risk</th><th class="num">% Eq</th><th class="num">Score</th><th>Notes</th></tr>
+    {% for r in entries %}
+    <tr>
+      <td><span class="ticker">{{ r.ticker }}</span> {{ dir_badge(r) }}{{ flags(r) }}{% if r.blocked_by %}<span class="badge b-blocked">BLOCKED</span>{% endif %}</td>
+      <td>{{ r.account or '–' }}</td>
+      <td>{{ r.extra.order_type or '' }}</td>
+      <td class="num">{{ (r.extra.entry_level if r.extra.entry_level is not none else r.trigger_price) | price }}</td>
+      <td class="num">{{ r.shares | num }}</td>
+      <td class="num">{{ r.stop_price | price }}</td>
+      <td class="num">{{ r.risk_dollars | money }}</td>
+      <td class="num">{{ r.risk_pct_equity | pct(2) }}</td>
+      <td class="num">{{ r.trend_score | num(0) }}</td>
+      <td class="wrap">{{ notes(r) }}</td>
+    </tr>
+    {% endfor %}
+  </table></div>
+  {% else %}<div class="empty">No new entries.</div>{% endif %}
+
+  <h2>Top watch ({{ watch | length }} of {{ watch_total + watch_hidden }})</h2>
+  {% if watch %}
+  <div class="scroll"><table>
+    <tr><th>Ticker</th><th>Order</th><th class="num">Entry level</th><th class="num">Distance (N)</th><th class="num">Last</th><th class="num">Shares</th><th class="num">Stop</th><th class="num">Score</th><th>Notes</th></tr>
+    {% for r in watch %}
+    <tr>
+      <td><span class="ticker">{{ r.ticker }}</span> {{ dir_badge(r) }}{{ flags(r) }}</td>
+      <td>{{ r.extra.order_type or '' }}</td>
+      <td class="num">{{ (r.extra.entry_level if r.extra.entry_level is not none else r.trigger_price) | price }}</td>
+      <td class="num">{{ r.distance_n | num(2) }}</td>
+      <td class="num">{{ r.extra.last_close | price }}</td>
+      <td class="num">{{ r.shares | num }}</td>
+      <td class="num">{{ r.stop_price | price }}</td>
+      <td class="num">{{ r.trend_score | num(0) }}</td>
+      <td class="wrap">{{ notes(r) }}</td>
+    </tr>
+    {% endfor %}
+  </table></div>
+  {% else %}<div class="empty">Nothing on watch.</div>{% endif %}
+
+  <h2>Expired ({{ expired | length }})</h2>
+  {% if expired %}
+  <div class="scroll"><table>
+    <tr><th>Ticker</th><th>Account</th><th>Was</th><th>First seen</th><th>Notes</th></tr>
+    {% for r in expired %}
+    <tr>
+      <td><span class="ticker">{{ r.ticker }}</span> {{ dir_badge(r) }}</td>
+      <td>{{ r.account or '' }}</td>
+      <td>{{ r.action | replace('_', ' ') }}</td>
+      <td>{{ r.first_seen_at }}</td>
+      <td class="wrap">{% if r.decision %}<span class="note">{{ r.decision.status }}{% if r.decision.note %}: {{ r.decision.note }}{% endif %}</span>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table></div>
+  {% else %}<div class="empty">Nothing expired.</div>{% endif %}
+
+  <h2>Heat vs budget</h2>
+  {% if heat %}
+  <table>
+    <tr><th>Equity</th><th class="num">Open risk</th><th class="num">Planned (adds + entries)</th><th class="num">Heat after planned</th><th class="num">Budget</th><th class="num">Remaining</th></tr>
+    <tr>
+      <td>{{ heat.equity | money }}</td>
+      <td class="num">{{ heat.open_risk_dollars | money }} ({{ heat.open_risk_pct | pct }})</td>
+      <td class="num">{{ heat.planned_risk_dollars | money }}</td>
+      <td class="num">{{ heat.heat_after_planned_pct | pct }}</td>
+      <td class="num">{{ heat.budget_dollars | money }} ({{ heat.budget_pct | pct }})</td>
+      <td class="num">{{ heat.remaining_dollars | money }}</td>
+    </tr>
+  </table>
+  {% else %}<div class="empty">No run stored yet.</div>{% endif %}
+
+  <h2>Market regime</h2>
+  {% if regime %}
+  <table>
+    <tr><th>Label</th><th>Benchmark</th><th class="num">Close</th><th class="num">200-day SMA</th><th>Above 200d</th><th class="num">Breadth &gt; 200d</th></tr>
+    <tr>
+      <td class="{{ regime.label | replace('_', '-') }}">{{ (regime.label or 'unknown') | replace('_', ' ') }}</td>
+      <td>{{ regime.benchmark or '' }}</td>
+      <td class="num">{{ regime.benchmark_close | price }}</td>
+      <td class="num">{{ regime.benchmark_sma200 | price }}</td>
+      <td>{{ 'yes' if regime.benchmark_above_200d else ('no' if regime.benchmark_above_200d is sameas false else '–') }}</td>
+      <td class="num">{{ regime.breadth_above_200d | pct }}</td>
+    </tr>
+  </table>
+  {% else %}<div class="empty">No regime data.</div>{% endif %}
+
+  {% if report %}
+  <h2>Run stats</h2>
+  <div class="cards">
+    {% if report.stage_seconds %}
+    <div class="card"><div class="label">Stage timings</div>
+      <table>
+        {% for stage, secs in report.stage_seconds.items() %}
+        <tr><td>{{ stage }}</td><td class="num">{{ secs | seconds }}</td></tr>
+        {% endfor %}
+      </table>
+    </div>
+    {% endif %}
+    {% if report.metrics %}
+    <div class="card"><div class="label">Metrics refresh</div>
+      <table>
+        {% for key, value in report.metrics.items() %}
+        <tr><td>{{ key | replace('_', ' ') }}</td><td class="num">{{ (value | seconds) if key.endswith('_seconds') else (value | num) }}</td></tr>
+        {% endfor %}
+      </table>
+    </div>
+    {% endif %}
+    {% if report.universe %}
+    <div class="card"><div class="label">Universe files</div>
+      <table>
+        <tr><td>US listings</td><td class="num">{{ report.universe.listed_rows | num }} ({{ report.universe.listed_etfs | num }} ETFs)</td></tr>
+        <tr><td>S&amp;P 500</td><td class="num">{{ report.universe.sp500_rows | num }}</td></tr>
+        {% if report.universe.listed_error %}<tr><td colspan="2" class="blocked">Listings kept: {{ report.universe.listed_error }}</td></tr>{% endif %}
+        {% if report.universe.sp500_error %}<tr><td colspan="2" class="blocked">S&amp;P 500 kept: {{ report.universe.sp500_error }}</td></tr>{% endif %}
+      </table>
+    </div>
+    {% endif %}
+    {% if report.alerts_triggered is not none %}
+    <div class="card"><div class="label">Alerts triggered</div><div class="value">{{ report.alerts_triggered }}</div></div>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <footer>Order tickets are suggestions from the stored run; check prices, borrow and account cash before placing.</footer>
+</div>
+</body>
+</html>
