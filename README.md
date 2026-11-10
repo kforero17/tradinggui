@@ -83,7 +83,7 @@ The script needs `.venv/bin/python`. It fills the repo path into the templates i
 | `com.tradinggui.weekly` | Saturday 06:00 | `python -m src.jobs weekly` |
 | `com.tradinggui.daily` | Monday to Friday 16:30 | `python -m src.jobs daily` |
 
-A run missed while the Mac sleeps starts on wake. Logs go to `logs/weekly.out.log`, `logs/weekly.err.log`, `logs/daily.out.log`, `logs/daily.err.log`, and `logs/trading.log` (rotated daily, kept 7 days).
+Both raise the open-file limit to 4096 (`SoftResourceLimits`); launchd's default of 256 made batched downloads fail with yfinance errors such as `unable to open database file`. Reinstalling boots out a running job, so wait for it to finish. A run missed while the Mac sleeps starts on wake. Logs go to `logs/weekly.out.log`, `logs/weekly.err.log`, `logs/daily.out.log`, `logs/daily.err.log`, and `logs/trading.log` (rotated daily, kept 7 days).
 
 ```bash
 launchctl print gui/$(id -u)/com.tradinggui.weekly | grep -E 'state|last exit|runs'

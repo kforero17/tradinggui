@@ -67,6 +67,13 @@
         <key>PATH</key>
         <string>__REPO__/.venv/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
     </dict>
+    <!-- launchd's default soft limit is 256 open files; yf.download with threads
+         opens a socket per ticker plus yfinance's SQLite caches, and ran out. -->
+    <key>SoftResourceLimits</key>
+    <dict>
+        <key>NumberOfFiles</key>
+        <integer>4096</integer>
+    </dict>
     <key>ProcessType</key>
     <string>Background</string>
 </dict>
