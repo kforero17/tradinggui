@@ -68,6 +68,8 @@ class Settings(BaseSettings):
     DEFAULT_ACCOUNT: str = "default"
 
     # Jobs and notifications
+    # The weekly job backs up the DB to <db dir>/backups before writing; newest N kept
+    DB_BACKUP_KEEP: int = 8
     REPORTS_DIR: Path = DATA_DIR / "reports"
     JOB_LOCK_PATH: Path = DATA_DIR / ".job.lock"
     SLACK_WEBHOOK_URL: Optional[str] = None

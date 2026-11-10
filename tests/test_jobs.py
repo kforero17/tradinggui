@@ -1,4 +1,5 @@
 import dataclasses
+import sqlite3
 from datetime import date, datetime
 
 import pandas as pd
@@ -140,6 +141,7 @@ def test_run_weekly_runs_the_stages_in_order(stubs, database):
     assert stubs["calls"][1] == ("metrics", None)
     assert stubs["calls"][2] == ("generate_run", "weekly", True, None, False)
     assert list(report.stage_seconds) == [
+        "backup",
         "universe",
         "metrics",
         "alerts",
@@ -147,6 +149,8 @@ def test_run_weekly_runs_the_stages_in_order(stubs, database):
         "digest",
         "total",
     ]
+    assert report.backup_path.parent == database.active_path.parent / "backups"
+    assert report.backup_path.exists()
     assert report.job == "weekly" and report.run_id == database.get_latest_run()["id"]
     assert report.metrics == STATS and report.universe == UNIVERSE_OK
     assert report.notified is True
@@ -157,6 +161,44 @@ def test_run_weekly_runs_the_stages_in_order(stubs, database):
     html = report.report_path.read_text()
     assert "ENT" in html and "Run stats" in html and "Metrics refresh" in html
     assert "weekly run" in report.summary_line()
+
+
+def test_backup_database_writes_a_consistent_copy(database):
+    database.add_portfolio_ticker("ABC", 1_000.0, 10)
+
+    path = pipeline.backup_database(datetime(2026, 11, 10, 6, 0, 0))
+
+    assert path.name == "jobs-20261110-060000.db"
+    with sqlite3.connect(path) as copy:
+        assert copy.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+        assert copy.execute("SELECT ticker FROM portfolio").fetchall() == [("ABC",)]
+
+
+def test_backup_database_keeps_only_the_newest(database):
+    for day in range(1, 6):
+        pipeline.backup_database(datetime(2026, 11, day, 6, 0), keep=3)
+
+    backups = sorted(
+        p.name for p in (database.active_path.parent / "backups").iterdir()
+    )
+    assert backups == [
+        "jobs-20261103-060000.db",
+        "jobs-20261104-060000.db",
+        "jobs-20261105-060000.db",
+    ]
+
+
+def test_run_weekly_stops_before_writing_when_the_backup_fails(
+    stubs, database, monkeypatch
+):
+    def fail(backup_path):
+        raise sqlite3.OperationalError("disk full")
+
+    monkeypatch.setattr(database, "backup_to", fail)
+
+    with pytest.raises(sqlite3.OperationalError):
+        pipeline.run_weekly()
+    assert stubs["calls"] == []
 
 
 def test_weekly_smoke_run_skips_universe_and_keeps_holdings(

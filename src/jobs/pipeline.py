@@ -1,7 +1,7 @@
 """The scheduled weekly and daily jobs.
 
-``run_weekly``: universe files -> metrics (bars, technicals, rotating
-fundamentals) -> alerts -> recommendations with an entry scan -> digest.
+``run_weekly``: DB backup -> universe files -> metrics (bars, technicals,
+rotating fundamentals) -> alerts -> recommendations with an entry scan -> digest.
 ``run_daily``: holdings and the latest ENTER/WATCH list on refreshed bars ->
 digest, notifying only when something needs action or holdings' bars are
 stale (the stop check ran on old prices). Both hold an exclusive file lock
@@ -35,6 +35,7 @@ __all__ = [
     "JobAlreadyRunning",
     "JobReport",
     "job_lock",
+    "backup_database",
     "evaluate_all_alerts",
     "actionable_rows",
     "run_weekly",
@@ -65,6 +66,8 @@ class JobReport:
     summary: dict[str, Any] = field(default_factory=dict)
     # Holdings whose bars end before the last completed session: {ticker, last_bar}.
     stale_holdings: list[dict[str, str]] = field(default_factory=list)
+    # The pre-run DB backup (weekly runs only).
+    backup_path: Path | None = None
 
     def summary_line(self) -> str:
         actions = self.summary.get("by_action", {})
@@ -250,6 +253,25 @@ def _stale_holdings(dashboard: Mapping[str, Any]) -> list[dict[str, str]]:
     return stale
 
 
+def backup_database(now: datetime, keep: int = settings.DB_BACKUP_KEEP) -> Path:
+    """Back up the live DB to ``<db dir>/backups`` and prune all but the newest ``keep``.
+
+    The weekly job writes thousands of rows, so it takes a restorable copy first.
+    A failed backup raises: the job must not write without one.
+    """
+    live = db.active_path
+    backup_dir = live.parent / "backups"
+    backup_path = db.backup_to(
+        backup_dir / f"{live.stem}-{now:%Y%m%d-%H%M%S}{live.suffix}"
+    )
+    # Timestamped names sort chronologically.
+    backups = sorted(backup_dir.glob(f"{live.stem}-*{live.suffix}"))
+    for old in backups[: max(len(backups) - keep, 0)]:
+        old.unlink()
+        logger.info(f"Pruned old DB backup {old.name}")
+    return backup_path
+
+
 def run_weekly(
     *,
     tickers: list[str] | None = None,
@@ -264,6 +286,8 @@ def run_weekly(
     with job_lock():
         stages: dict[str, float] = {}
         started = perf_counter()
+        with _stage(stages, "backup"):
+            backup_path = backup_database(datetime.now())
         universe: UniverseRefreshResult | None = None
         if tickers is None and limit is None:
             with _stage(stages, "universe"):
@@ -296,6 +320,7 @@ def run_weekly(
             notified=notified,
             summary=dashboard["summary"],
             stale_holdings=stale,
+            backup_path=backup_path,
         )
 
 

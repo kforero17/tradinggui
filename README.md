@@ -32,8 +32,8 @@ Personal trading dashboard combining trend-following recommendations (long and s
 Two scheduled jobs share an exclusive file lock (`data/.job.lock`), so they never overlap. The Today page's **Recheck holdings** button runs the daily job's logic on freshly downloaded bars (holdings plus this week's ENTER/WATCH list) and stores a `manual` run. It takes the same lock, and answers "A scheduled job is running; try again shortly" while a job runs.
 
 ```bash
-# Weekly: universe files -> bars and technicals -> rotating fundamentals -> alerts
-#         -> recommendations with an entry scan -> digest (always notifies)
+# Weekly: DB backup -> universe files -> bars and technicals -> rotating fundamentals
+#         -> alerts -> recommendations with an entry scan -> digest (always notifies)
 .venv/bin/python -m src.jobs weekly [--tickers A,B | --limit N] [--no-notify]
 
 # Weekday: holdings and the latest ENTER/WATCH list on refreshed bars -> digest
@@ -43,7 +43,7 @@ Two scheduled jobs share an exclusive file lock (`data/.job.lock`), so they neve
 .venv/bin/python -m src.main
 ```
 
-- **weekly** refreshes the universe CSVs, updates the bar cache and technical metrics for the universe plus holdings in batches of 500, fetches the fundamentals that are due, evaluates alerts, stores a recommendation run that scans for new entries, then writes the HTML digest and sends it.
+- **weekly** first backs up the database (see Data), then refreshes the universe CSVs, updates the bar cache and technical metrics for the universe plus holdings in batches of 500, fetches the fundamentals that are due, evaluates alerts, stores a recommendation run that scans for new entries, then writes the HTML digest and sends it.
 - `--tickers A,B` or `--limit N` (mutually exclusive) make a smoke run on a subset, plus holdings: the universe-file refresh is skipped and only the subset (plus holdings and the watchlist) is scanned for entries.
 - **daily** stores a run that re-evaluates positions (stops, channel exits, add-on units) and the latest ENTER/WATCH rows on freshly downloaded bars, so a watch that breaks out mid-week shows up as ENTER that evening. The report is always written. The daily job notifies only when something is actionable:
   - an EXIT_STOP, EXIT_CHANNEL or ADD_UNIT row
@@ -100,6 +100,8 @@ launchctl kickstart -k gui/$(id -u)/com.tradinggui.daily   # run one now
 - **Fundamentals** (`yfinance` `.info`) rotate instead of being fetched every run: holdings always, plus liquid non-ETF stocks whose last fetch is `FUNDAMENTALS_MAX_AGE_DAYS` or more days old, oldest first, at most `FUNDAMENTALS_MAX_PER_RUN` per run (holdings are never cut). The rest is deferred to later runs. A degraded `.info` reply (no `quoteType`, or no usable values) counts as a failure, so the stored values are kept and the ticker stays due.
 - **Dead-ticker skip list**: a ticker that fails `TICKER_MAX_CONSECUTIVE_FAILURES` runs in a row (no bars, stale bars or too little history) is skipped for `TICKER_SKIP_DAYS` days, then retried. Holdings are never skipped. Outcomes are in the `ticker_status` table.
 - **Database**: `data/processed/stock_metrics_v2.db`. The migration that added accounts first wrote a backup to `data/processed/stock_metrics_v2.db.pre-accounts.bak`.
+- **Backups**: before writing anything, the weekly job copies the database with SQLite's online backup API to `data/processed/backups/stock_metrics_v2-<YYYYmmdd-HHMMSS>.db` and keeps the newest `DB_BACKUP_KEEP`. If the backup fails, the job stops before writing. To restore, stop the web app and any job, then copy a backup over `stock_metrics_v2.db` and delete the leftover `stock_metrics_v2.db-wal` and `-shm` files.
+- **Tests** never touch these files: `tests/conftest.py` points `DB_PATH`, the bar cache, reports, the job lock and the log at a temporary directory before anything imports `src`, and refuses to run if `DB_PATH` still resolves inside `data/`.
 - **Reports**: HTML digests in `data/reports/`.
 
 ## Data Pipeline
@@ -315,7 +317,7 @@ Settings are managed via `pydantic-settings` and can be overridden in `.env`:
 | `CRYPTO_DATA_AGE_LIMIT_MINUTES` | `5` | Crypto freshness threshold |
 | `WEB_APP_HOST` | `127.0.0.1` | Flask bind address |
 | `WEB_APP_PORT` | `8051` | Flask port |
-| `DISABLE_SSL_VERIFY` | `false` | Bypass SSL (for corporate proxies) |
+| `DISABLE_SSL_VERIFY` | `false` | Bypass SSL (for corporate proxies); also applies to the universe downloads and the Slack webhook |
 | `FLASK_SECRET_KEY` | auto-generated | Session secret key |
 
 Trend-following and job settings (`src/config/settings.py`, also overridable in `.env`):
@@ -340,6 +342,7 @@ Trend-following and job settings (`src/config/settings.py`, also overridable in 
 | `BATCH_REQUESTS_PER_SECOND` | `0.5` | Rate limit for batched bar downloads |
 | `TICKER_MAX_CONSECUTIVE_FAILURES` / `TICKER_SKIP_DAYS` | `3` / `28` | Skip-list threshold and duration |
 | `DEFAULT_ACCOUNT` | `default` | Name of the seeded account |
+| `DB_BACKUP_KEEP` | `8` | Pre-run database backups the weekly job keeps |
 | `SLACK_WEBHOOK_URL` | unset | Slack incoming webhook for the digest (set in the environment or `.env`) |
 
 ## Dependencies

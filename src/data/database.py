@@ -486,6 +486,17 @@ class Database:
             f"'{settings.DEFAULT_ACCOUNT}', backup at {backup_path}"
         )
 
+    @property
+    def active_path(self) -> Path:
+        """The DB file actually in use (the temp-dir fallback when DB_PATH was unwritable)."""
+        return self._active_db_path
+
+    def backup_to(self, backup_path: Path) -> Path:
+        """Write a consistent copy of the live DB to ``backup_path``."""
+        backup_path.parent.mkdir(parents=True, exist_ok=True)
+        self._backup_database(self._active_db_path, backup_path)
+        return backup_path
+
     @staticmethod
     def _backup_database(db_path: Path, backup_path: Path) -> None:
         """Write a consistent copy of the DB with SQLite's online backup API.
