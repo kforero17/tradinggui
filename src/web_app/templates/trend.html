@@ -8,12 +8,7 @@
 .trend-controls input, .trend-controls select {padding:.5rem; max-width:9rem}
 .trend-section {margin-bottom:2rem}
 .trend-section h2 {margin-bottom:.5rem}
-.rule-badge {display:inline-block; padding:.2rem .5rem; border-radius:4px; font-weight:600; font-size:.85rem}
-.rule-EXIT_STOP, .rule-EXIT_CHANNEL {background:var(--color-negative); color:#fff}
-.rule-ADD_UNIT {background:var(--accent-green); color:#000}
-.rule-HOLD {background:var(--bg-header); color:var(--text-muted)}
-.rule-late {display:block; color:var(--color-negative); font-size:.8rem; margin-top:.2rem}
-.trend-ticker {background:none; color:var(--accent-green); border:0; cursor:pointer; padding:0; font:inherit}
+/* .rule-badge / .rule-* and .trend-ticker live in styles.css, shared with the Today page */
 .trend-breaches {color:var(--color-warning)}
 .data-table td, .data-table th {padding:.6rem}
 #trendChart, #backtestChart {min-height:420px}
@@ -22,9 +17,10 @@
 {% block content %}
 <div class="page-header"><h1>Trend Following</h1></div>
 <p class="text-muted">
-    Turtle rules from <em>Way of the Turtle</em>, long only. N is the 20-day average true range. The stop sits 2N below
+    Turtle rules from <em>Way of the Turtle</em>. N is the 20-day average true range. For a long, the stop sits 2N below
     entry, the exit is the 20-day low (System 2) or the 10-day low (System 1), and entries are 55-day (S2) or
-    20-day (S1) breakouts. When a rule says exit, exit. No exceptions.
+    20-day (S1) breakouts. Shorts (negative shares) mirror the rules: stop 2N above entry, exit on the channel high.
+    Equity defaults to the total stored in your accounts. When a rule says exit, exit. No exceptions.
 </p>
 
 <div class="trend-controls">
@@ -45,7 +41,7 @@
     <h2>Open positions</h2>
     <p id="positionsStatus" class="text-muted" role="status">Loading positions…</p>
     <div class="data-table"><table>
-        <thead><tr><th>Ticker</th><th>Rule</th><th>Last</th><th>Entry</th><th>N</th><th>Stop</th><th>Exit level</th>
+        <thead><tr><th>Ticker</th><th>Account</th><th>Rule</th><th>Last</th><th>Entry</th><th>N</th><th>Stop</th><th>Exit level</th>
             <th>Distance to stop (N)</th><th>Open R</th><th>Unrealized</th><th>Open risk</th><th>Units held</th></tr></thead>
         <tbody id="positionRows"></tbody>
     </table></div>

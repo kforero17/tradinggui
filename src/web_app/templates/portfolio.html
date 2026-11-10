@@ -42,8 +42,26 @@
     .options-table th, .options-table td { text-align: left; padding: 0.5rem; border-bottom: 1px solid var(--border-color); white-space: nowrap; }
     .options-table th { color: var(--text-muted); font-weight: normal; font-size: 0.85rem; }
     .options-table .close-form { display: flex; gap: 0.5rem; align-items: center; }
+    .holdings-section { margin-bottom: 2rem; }
+    .holdings-table .subtotal-row td { background-color: var(--bg-header); font-weight: bold; }
+    .holdings-table .grand-total-row td { background-color: var(--bg-header); font-weight: bold; color: var(--text-heading); border-top: 2px solid var(--accent-blue); }
+    .account-heading { color: var(--text-heading); font-size: 1.3rem; margin: 2rem 0 1rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem; }
+    .account-heading .text-muted { font-size: 0.95rem; font-weight: normal; }
+    .account-badge { font-size: 0.75rem; padding: 0.15rem 0.5rem; border-radius: 4px; margin-left: 0.5rem; vertical-align: middle; background-color: var(--bg-card-hover); color: var(--text-muted); }
 </style>
 {% endblock %}
+
+{% macro signed_money(value) -%}
+{%- if value is none -%}N/A{%- else -%}
+<span class="{{ 'positive' if value >= 0 else 'negative' }}">{{ "+" if value >= 0 else "-" }}${{ "{:,.2f}".format(value|abs) }}</span>
+{%- endif -%}
+{%- endmacro %}
+
+{% macro account_select() -%}
+<select name="account" aria-label="Account" title="Account">
+    {% for name in accounts %}<option value="{{ name }}">{{ name }}</option>{% endfor %}
+</select>
+{%- endmacro %}
 
 {% block content %}
 <div class="page-header"><h1>My Stock Portfolio</h1></div>
@@ -84,6 +102,7 @@
 {% endif %}
 
 <form action="{{ url_for('add_stock') }}" method="post" class="add-stock-form">
+    {{ account_select() }}
     <input type="text" name="ticker" placeholder="Ticker (e.g., AAPL)">
     <select name="side" aria-label="Side">
         <option value="long">Long</option>
@@ -94,27 +113,94 @@
     <button type="submit">Add Stock</button>
 </form>
 
+{% if account_groups %}
+<div class="holdings-section card">
+    <div class="section-title">Holdings by account</div>
+    <div class="options-table-wrap">
+    <table class="options-table holdings-table">
+        <thead>
+            <tr><th>Account</th><th>Position</th><th>Shares / Contracts</th><th>Price / Mark</th><th>Market Value</th><th>Unrealized</th><th>Day</th><th>YTD</th></tr>
+        </thead>
+        <tbody>
+        {% for group in account_groups %}
+            {% for stock in group.positions %}
+            <tr>
+                <td>{{ group.account }}</td>
+                <td>{{ stock.ticker }}{% if stock.shares < 0 %}<span class="side-badge short">SHORT</span>{% endif %}</td>
+                <td>{{ "%g"|format(stock.shares) }}</td>
+                <td>{{ "$%.2f"|format(stock.last_price) if stock.last_price is not none else 'N/A' }}</td>
+                <td>${{ "{:,.2f}".format(stock.current_value or 0) }}</td>
+                <td>{{ signed_money(stock.unrealized) }}</td>
+                <td>{{ signed_money(stock.gains.get('1D', {}).gain_dollars) }}</td>
+                <td>{{ signed_money(stock.gains.get('YTD', {}).gain_dollars) }}</td>
+            </tr>
+            {% endfor %}
+            {% for opt in group.options %}
+            <tr>
+                <td>{{ group.account }}</td>
+                <td>{{ opt.underlying }} {{ opt.expiry.strftime('%Y-%m-%d') }} ${{ "%g"|format(opt.strike) }} {{ opt.option_type|upper }}{% if opt.contracts < 0 %}<span class="side-badge short">WRITTEN</span>{% endif %}</td>
+                <td>{{ "%g"|format(opt.contracts) }}</td>
+                <td>{{ "$%.2f"|format(opt.quote.mark) if opt.quote else 'N/A' }}</td>
+                <td>{{ "${:,.2f}".format(opt.current_value) if opt.current_value is not none else 'N/A' }}</td>
+                <td>{{ signed_money(opt.unrealized) }}</td>
+                <td>{{ signed_money(opt.gains['1D'].gain_dollars) }}</td>
+                <td>{{ signed_money(opt.gains['YTD'].gain_dollars) }}</td>
+            </tr>
+            {% endfor %}
+            <tr class="subtotal-row">
+                <td>{{ group.account }} subtotal</td>
+                <td colspan="3"></td>
+                <td>${{ "{:,.2f}".format(group.summary.total_value) }}</td>
+                <td></td>
+                <td>{{ signed_money(group.summary.day_gain_dollars) }}</td>
+                <td>
+                    {{ signed_money(group.summary.ytd_total_gain_dollars) }}
+                    {% if group.summary.ytd_realized_gain_dollars %}<span class="text-muted">(incl. realized {{ signed_money(group.summary.ytd_realized_gain_dollars) }})</span>{% endif %}
+                </td>
+            </tr>
+        {% endfor %}
+        {% if summary %}
+            <tr class="grand-total-row">
+                <td>All accounts</td>
+                <td colspan="3"></td>
+                <td>${{ "{:,.2f}".format(summary.total_value) }}</td>
+                <td></td>
+                <td>{{ signed_money(summary.day_gain_dollars) }}</td>
+                <td>{{ signed_money(summary.ytd_total_gain_dollars) }}</td>
+            </tr>
+        {% endif %}
+        </tbody>
+    </table>
+    </div>
+</div>
+{% endif %}
+
+{% for group in account_groups if group.positions %}
+<h2 class="account-heading">{{ group.account }} <span class="text-muted">· ${{ "{:,.2f}".format(group.summary.total_value) }}</span></h2>
 <div class="portfolio-grid">
-    {% for stock in portfolio %}
+    {% for stock in group.positions %}
+        {% set slug = (stock.account ~ '-' ~ stock.ticker)|replace(' ', '_') %}
         <div class="stock-card">
             <div class="stock-header">
-                <h2>{{ stock.ticker }}{% if stock.shares < 0 %}<span class="side-badge short">SHORT</span>{% endif %}</h2>
-                <a href="{{ url_for('delete_stock', ticker=stock.ticker) }}" class="delete-btn">Remove</a>
+                <h2>{{ stock.ticker }}{% if stock.shares < 0 %}<span class="side-badge short">SHORT</span>{% endif %}<span class="account-badge">{{ stock.account }}</span></h2>
+                <a href="{{ url_for('delete_stock', account=stock.account, ticker=stock.ticker) }}" class="delete-btn">Remove</a>
             </div>
 
             <div class="position-forms">
                 <form action="{{ url_for('update_shares') }}" method="post" class="shares-form">
                     <input type="hidden" name="ticker" value="{{ stock.ticker }}">
-                    <label for="shares-{{ stock.ticker }}">Shares:</label>
-                    <input type="number" id="shares-{{ stock.ticker }}" name="shares"
+                    <input type="hidden" name="account" value="{{ stock.account }}">
+                    <label for="shares-{{ slug }}">Shares:</label>
+                    <input type="number" id="shares-{{ slug }}" name="shares"
                            value="{{ stock.shares }}" step="0.01" class="shares-input"
                            title="Negative for a short position">
                     <button type="submit" class="btn-sm">Update</button>
                 </form>
                 <form action="{{ url_for('update_cost_basis') }}" method="post" class="shares-form">
                     <input type="hidden" name="ticker" value="{{ stock.ticker }}">
-                    <label for="cost-{{ stock.ticker }}">{{ 'Short Proceeds' if stock.shares < 0 else 'Cost Basis' }}:</label>
-                    <input type="number" id="cost-{{ stock.ticker }}" name="cost_basis"
+                    <input type="hidden" name="account" value="{{ stock.account }}">
+                    <label for="cost-{{ slug }}">{{ 'Short Proceeds' if stock.shares < 0 else 'Cost Basis' }}:</label>
+                    <input type="number" id="cost-{{ slug }}" name="cost_basis"
                            value="{{ stock.cost_basis or 0 }}" step="0.01" min="0" class="shares-input">
                     <button type="submit" class="btn-sm">Update</button>
                 </form>
@@ -131,8 +217,9 @@
 
             <form action="{{ url_for('sell_stock') }}" method="post" class="sell-form">
                 <input type="hidden" name="ticker" value="{{ stock.ticker }}">
-                <label for="sale-{{ stock.ticker }}">{{ 'Cover Price/Share' if stock.shares < 0 else 'Sale Price/Share' }}:</label>
-                <input type="number" id="sale-{{ stock.ticker }}" name="sale_price"
+                <input type="hidden" name="account" value="{{ stock.account }}">
+                <label for="sale-{{ slug }}">{{ 'Cover Price/Share' if stock.shares < 0 else 'Sale Price/Share' }}:</label>
+                <input type="number" id="sale-{{ slug }}" name="sale_price"
                        value="{{ stock.last_price if stock.last_price else '' }}" step="0.01" min="0" class="shares-input" required>
                 <button type="submit" class="btn-sm btn-danger">{{ 'Cover Short' if stock.shares < 0 else 'Sell Position' }}</button>
             </form>
@@ -168,16 +255,17 @@
                 {{ stock.plot|safe if stock.plot else '<p>No plot data available.</p>' }}
             </div>
         </div>
-    {% else %}
-        {% if not options %}
-        <p class="empty-message">Your portfolio is empty. Add a stock to get started.</p>
-        {% endif %}
     {% endfor %}
 </div>
+{% endfor %}
+{% if not portfolio and not options %}
+<p class="empty-message">Your portfolio is empty. Add a stock to get started.</p>
+{% endif %}
 
 <div class="options-section card">
     <div class="section-title">Options</div>
     <form action="{{ url_for('add_option') }}" method="post" class="add-stock-form">
+        {{ account_select() }}
         <input type="text" name="underlying" placeholder="Underlying (e.g., SPCX)" required>
         <select name="side" aria-label="Side">
             <option value="long">Buy</option>
@@ -199,7 +287,7 @@
     <table class="options-table">
         <thead>
             <tr>
-                <th>Contract</th><th>Contracts</th><th>Premium/Sh</th><th>Mark</th><th>Bid / Ask</th><th>IV</th>
+                <th>Account</th><th>Contract</th><th>Contracts</th><th>Premium/Sh</th><th>Mark</th><th>Bid / Ask</th><th>IV</th>
                 <th>Market Value</th><th>Day</th><th>Unrealized</th><th>Close at (per share)</th><th></th>
             </tr>
         </thead>
@@ -207,6 +295,7 @@
         {% for opt in options %}
             {% set day = opt.gains['1D'].gain_dollars %}
             <tr>
+                <td>{{ opt.account or '—' }}</td>
                 <td>
                     {{ opt.underlying }} {{ opt.expiry.strftime('%Y-%m-%d') }} ${{ "%g"|format(opt.strike) }} {{ opt.option_type|upper }}
                     {% if opt.contracts < 0 %}<span class="side-badge short">WRITTEN</span>{% endif %}

@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}Today{% endblock %}
+{% block head_extra %}
+<script src="https://cdn.plot.ly/plotly-2.26.0.min.js"></script>
+{% endblock %}
+{% block content %}
+<div class="page-header"><h1>Today</h1></div>
+
+<div class="today-toolbar">
+    <span id="todayStatus" class="text-muted" role="status">Loading the latest run…</span>
+    <button id="recheckHoldings" type="button" class="btn-sm">Recheck holdings</button>
+    <button id="openAccounts" type="button" class="btn-sm btn-muted">Accounts</button>
+</div>
+
+<div id="staleWarning" class="today-stale" hidden></div>
+
+<div id="summaryCards" class="metrics-grid"></div>
+
+<div class="filters-container">
+    <div class="filters-row">
+        <div class="filter-group">
+            <label>Direction</label>
+            <div class="toggle-group" id="filterDirection">
+                <button type="button" data-value="ALL" class="active">All</button>
+                <button type="button" data-value="LONG">Long</button>
+                <button type="button" data-value="SHORT" class="bearish">Short</button>
+            </div>
+        </div>
+        <div class="filter-group">
+            <label>Asset</label>
+            <div class="toggle-group" id="filterAsset">
+                <button type="button" data-value="ALL" class="active">All</button>
+                <button type="button" data-value="stock">Stocks</button>
+                <button type="button" data-value="etf">ETFs</button>
+            </div>
+        </div>
+        <div class="filter-group">
+            <label for="filterAccount">Account</label>
+            <select id="filterAccount"><option value="ALL">All accounts</option></select>
+        </div>
+    </div>
+</div>
+
+<div id="actionGroups"></div>
+
+<details class="card today-group" id="expiredSection">
+    <summary>Expired signals <span id="expiredCount" class="text-muted"></span></summary>
+    <p class="text-muted">Signals from the previous run that no longer fire. Journal what you did about them.</p>
+    <div id="expiredTable"></div>
+</details>
+
+<div id="chartModal" class="modal">
+    <div class="modal-content">
+        <span class="close" data-close="chartModal" role="button" aria-label="Close">&times;</span>
+        <h2 class="modal-title" id="chartModalTitle">Chart</h2>
+        <p id="chartModalStatus" class="text-muted"></p>
+        <div id="todayChart"></div>
+    </div>
+</div>
+
+<div id="accountsModal" class="modal">
+    <div class="modal-content">
+        <span class="close" data-close="accountsModal" role="button" aria-label="Close">&times;</span>
+        <h2 class="modal-title">Accounts</h2>
+        <p class="text-muted">Equity sizes every trade (the total is one risk budget). Cash limits which account a long
+            entry is routed to, and only accounts that allow shorts get short entries.</p>
+        <p id="accountsStatus" class="text-muted" role="status"></p>
+        <div class="data-table"><table>
+            <thead><tr><th>Name</th><th>Equity ($)</th><th>Cash ($)</th><th>Shorts</th><th>Updated</th><th></th></tr></thead>
+            <tbody id="accountRows"></tbody>
+        </table></div>
+    </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>window.TODAY_CONFIG = {staleDays: {{ stale_days|tojson }}, defaultAccount: {{ default_account|tojson }}};</script>
+<script src="{{ url_for('static', filename='js/today.js') }}"></script>
+{% endblock %}

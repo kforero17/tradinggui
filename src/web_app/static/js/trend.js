@@ -3,7 +3,7 @@
     const SETTINGS_KEY = 'trend-settings';
     const RULE_LABELS = {
         EXIT_STOP: 'EXIT · stop hit',
-        EXIT_CHANNEL: 'EXIT · channel low',
+        EXIT_CHANNEL: 'EXIT · channel',
         ADD_UNIT: 'Add unit',
         HOLD: 'Hold',
     };
@@ -50,11 +50,11 @@
         return td;
     }
 
-    function tickerButton(row, ticker) {
+    function tickerButton(row, ticker, account) {
         const button = document.createElement('button');
         button.className = 'trend-ticker';
         button.textContent = ticker;
-        button.onclick = () => loadChart(ticker);
+        button.onclick = () => loadChart(ticker, account);
         row.insertCell().append(button);
     }
 
@@ -73,7 +73,9 @@
             const data = await getJson('/api/trend/positions?' + query());
             for (const p of data.positions) {
                 const row = body.insertRow();
-                tickerButton(row, p.ticker);
+                tickerButton(row, p.ticker, p.account);
+                cell(row, p.account + (p.direction === 'SHORT' ? ' · SHORT' : ''),
+                    p.direction === 'SHORT' ? 'negative' : '');
                 const rule = row.insertCell();
                 const badge = document.createElement('span');
                 badge.className = 'rule-badge rule-' + p.action;
@@ -98,10 +100,10 @@
             }
             if (!data.positions.length) {
                 const row = body.insertRow();
-                cell(row, 'No long positions in the Portfolio tab.').colSpan = 12;
+                cell(row, 'No positions in the Portfolio tab.').colSpan = 13;
             }
             const exits = data.positions.filter(p => p.action.startsWith('EXIT')).length;
-            const skipped = data.skipped.map(s => `${s.ticker} (${s.reason})`).join(', ');
+            const skipped = data.skipped.map(s => `${s.ticker} in ${s.account} (${s.reason})`).join(', ');
             el('positionsStatus').textContent =
                 `${data.config.system} · ${data.config.entry_period}-day entry / ${data.config.exit_period}-day exit / ` +
                 `${data.config.stop_n}N stop · ${exits} position${exits === 1 ? '' : 's'} to exit · ` +
@@ -112,17 +114,20 @@
                 li.textContent = 'Unit limit: ' + text;
                 return li;
             }));
-            if (data.positions.length && !el('trendChart').hasChildNodes()) loadChart(data.positions[0].ticker);
+            if (data.positions.length && !el('trendChart').hasChildNodes()) {
+                loadChart(data.positions[0].ticker, data.positions[0].account);
+            }
         } catch (error) {
             el('positionsStatus').textContent = 'Could not load positions: ' + error.message;
         }
     }
 
-    async function loadChart(ticker) {
-        el('chartTitle').textContent = ticker;
+    async function loadChart(ticker, account) {
+        el('chartTitle').textContent = account ? `${ticker} · ${account}` : ticker;
         el('chartStatus').textContent = 'Loading chart…';
         try {
-            const data = await getJson(`/api/trend/chart/${encodeURIComponent(ticker)}?` + query());
+            const params = query() + (account ? '&account=' + encodeURIComponent(account) : '');
+            const data = await getJson(`/api/trend/chart/${encodeURIComponent(ticker)}?` + params);
             const plot = JSON.parse(data.plot_data);
             await Plotly.newPlot('trendChart', plot.data, plot.layout, {responsive: true, displaylogo: false});
             el('chartStatus').textContent = 'Last 12 months of daily bars.';
