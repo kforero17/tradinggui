@@ -29,7 +29,7 @@ Personal trading dashboard combining trend-following recommendations (long and s
 
 ## Jobs
 
-Two scheduled jobs share an exclusive file lock (`data/.job.lock`), so they never overlap. The Today page's **Recheck holdings** button takes the same lock and answers "A scheduled job is running; try again shortly" while a job runs.
+Two scheduled jobs share an exclusive file lock (`data/.job.lock`), so they never overlap. The Today page's **Recheck holdings** button runs the daily job's logic on freshly downloaded bars (holdings plus this week's ENTER/WATCH list) and stores a `manual` run. It takes the same lock, and answers "A scheduled job is running; try again shortly" while a job runs.
 
 ```bash
 # Weekly: universe files -> bars and technicals -> rotating fundamentals -> alerts
@@ -45,10 +45,25 @@ Two scheduled jobs share an exclusive file lock (`data/.job.lock`), so they neve
 
 - **weekly** refreshes the universe CSVs, updates the bar cache and technical metrics for the universe plus holdings in batches of 500, fetches the fundamentals that are due, evaluates alerts, stores a recommendation run that scans for new entries, then writes the HTML digest and sends it.
 - `--tickers A,B` or `--limit N` (mutually exclusive) make a smoke run on a subset, plus holdings: the universe-file refresh is skipped and only the subset (plus holdings and the watchlist) is scanned for entries.
-- **daily** stores a run that re-evaluates positions (stops, channel exits, add-on units) and the latest ENTER/WATCH rows on freshly downloaded bars. The report is always written; it notifies only when something is actionable: an EXIT_STOP, EXIT_CHANNEL or ADD_UNIT row, or an ENTER that is new since the previous run. Rows already marked Taken or Skipped in the journal don't notify; undecided exits keep notifying every day.
+- **daily** stores a run that re-evaluates positions (stops, channel exits, add-on units) and the latest ENTER/WATCH rows on freshly downloaded bars, so a watch that breaks out mid-week shows up as ENTER that evening. The report is always written. The daily job notifies only when something is actionable:
+  - an EXIT_STOP, EXIT_CHANNEL or ADD_UNIT row
+  - an ENTER that is new since the previous run
+  - stale price data for a holding
+
+  Rows already marked Taken or Skipped in the journal don't notify; undecided exits keep notifying every day.
+- **Stale prices**: if a holding's bars are still older than the last completed session after the refresh (for example, Yahoo was down), its rows are flagged "bars stale", Today shows a red banner, the digest leads with "price data stale for N holdings – stop checks may be late", and the job exits `3`.
 - `--no-notify` writes the report but skips notifications.
 
-Exit codes for `python -m src.jobs`: `0` success, `1` error, `2` another job holds the lock (argparse also uses `2` for bad arguments). `python -m src.main` exits `1` on missing ticker files, a held lock or an error.
+Exit codes for `python -m src.jobs`:
+
+| Code | Meaning |
+|---|---|
+| `0` | Success |
+| `1` | Error |
+| `2` | Another job holds the lock (argparse also uses `2` for bad arguments) |
+| `3` | Completed, but some holdings' price data is stale |
+
+`python -m src.main` exits `1` on missing ticker files, a held lock or an error.
 
 ### Notifications
 
@@ -79,9 +94,10 @@ launchctl kickstart -k gui/$(id -u)/com.tradinggui.daily   # run one now
 ## Data
 
 - **Universe**: the weekly job downloads all US listings from the NASDAQ Trader symbol directory (`nasdaqlisted.txt` and `otherlisted.txt`) into `data/raw/us_listed.csv`, and the S&P 500 members from Wikipedia into `data/raw/sp500.csv`. A failed download, or fewer rows than `UNIVERSE_MIN_LISTED_ROWS` / `UNIVERSE_MIN_SP500_ROWS`, keeps the previous file. ETFs are included (`UNIVERSE_INCLUDE_ETFS`). Until the first refresh, the legacy `data/raw/nasdaq.csv` is used instead of `us_listed.csv`.
-- **Recommendation universe**: liquid listings (last price at least `UNIVERSE_MIN_PRICE`, 50-day average dollar volume at least `UNIVERSE_MIN_DOLLAR_VOLUME`) plus holdings and the Trend watchlist. Leveraged and inverse ETFs are excluded by name (`UNIVERSE_EXCLUDE_LEVERAGED_ETFS`), because their daily reset breaks long-run trend rules.
-- **Bar cache**: split-adjusted daily OHLC per ticker in `data/cache/ohlc/<TICKER>.csv`. The first download goes back to 2015-01-01; later runs download only the bars after the last cached one, 100 tickers per `yf.download` call. A new split re-downloads that ticker's full history.
-- **Fundamentals** (`yfinance` `.info`) rotate instead of being fetched every run: holdings always, plus liquid non-ETF stocks whose last fetch is `FUNDAMENTALS_MAX_AGE_DAYS` or more days old, oldest first, at most `FUNDAMENTALS_MAX_PER_RUN` per run (holdings are never cut). The rest is deferred to later runs.
+- **Recommendation universe**: liquid listings (last price at least `UNIVERSE_MIN_PRICE`, 50-day average dollar volume at least `UNIVERSE_MIN_DOLLAR_VOLUME`) plus holdings and the Trend watchlist. Leveraged and inverse ETFs are excluded by name (`UNIVERSE_EXCLUDE_LEVERAGED_ETFS`), because their daily reset breaks long-run trend rules. The entry scan also drops skip-listed tickers (unless held or watched) and tickers whose last cached bar is more than 10 days before the last completed session (`MAX_BAR_AGE_DAYS` in `src/jobs/metrics_refresh.py`), so frozen data can't produce signals.
+- **Entry dates**: a position's entry date (which sets N at entry and the 2N stop) comes from the earliest open broker lot imported on Trade Review, matched on account name and symbol. The broker account name must equal the account name in Today → Accounts; otherwise the date falls back to when the position was added, and the row says so.
+- **Bar cache**: split-adjusted daily OHLC per ticker in `data/cache/ohlc/<TICKER>.csv`. The first download goes back to 2015-01-01; later runs download only the bars after the last cached one, 100 tickers per `yf.download` call. A new split re-downloads that ticker's full history. The bar of a session still in progress is never cached (a weekday counts as complete after 17:00 New York time). `data/cache/ohlc/_checked.json` records when each ticker was last brought up to date, so a holiday doesn't trigger a download on every call. A ticker missing from a download is retried on the next call.
+- **Fundamentals** (`yfinance` `.info`) rotate instead of being fetched every run: holdings always, plus liquid non-ETF stocks whose last fetch is `FUNDAMENTALS_MAX_AGE_DAYS` or more days old, oldest first, at most `FUNDAMENTALS_MAX_PER_RUN` per run (holdings are never cut). The rest is deferred to later runs. A degraded `.info` reply (no `quoteType`, or no usable values) counts as a failure, so the stored values are kept and the ticker stays due.
 - **Dead-ticker skip list**: a ticker that fails `TICKER_MAX_CONSECUTIVE_FAILURES` runs in a row (no bars, stale bars or too little history) is skipped for `TICKER_SKIP_DAYS` days, then retried. Holdings are never skipped. Outcomes are in the `ticker_status` table.
 - **Database**: `data/processed/stock_metrics_v2.db`. The migration that added accounts first wrote a backup to `data/processed/stock_metrics_v2.db.pre-accounts.bak`.
 - **Reports**: HTML digests in `data/reports/`.
@@ -100,6 +116,8 @@ The crypto pipeline has no autonomous scheduler. It requires Claude (or another 
 ### Portfolio Data
 
 Managed interactively through the web UI. Users add long or short stock positions and option positions, update shares/cost basis, and record sales, covers and option closes. Realized gains are tracked with YTD calculations.
+
+Positions belong to an account, and one ticker can be held in several accounts. Adding or growing a short in an account that doesn't allow shorts is refused. A form or the legacy `/delete_stock/<ticker>` route without an account acts on the ticker's only holding account, and is refused if several accounts hold it. A change that matches no position shows a warning.
 
 ## Data Model
 
@@ -213,7 +231,7 @@ Start with `python run_web_app.py` (default: `http://127.0.0.1:8051`).
 
 | Route | Tab | Description |
 |---|---|---|
-| `/` | Today | Home page, read from the latest stored run: the action list (exits, add-ons, entries, watch) with copyable order tickets, open risk against the heat budget, the market regime (benchmark vs its 200-day average, breadth), the signal journal (Taken / Skip per row), expired signals, the Accounts editor and **Recheck holdings**. Filters by direction, asset type and account. |
+| `/` | Today | Home page, read from the latest stored run. Shows the action list (exits, add-ons, entries, watch) with copyable order tickets and NEW / STILL VALID / LATE badges, open risk against the heat budget, and the market regime (benchmark vs its 200-day average, breadth). It also has the signal journal (Taken / Skip / Note per row), expired signals, a STALE warning when the weekly run is more than 8 days old, a red banner for holdings with stale prices, a "Not evaluated" card for holdings the rules couldn't check (for example, no cost basis), the Accounts editor and **Recheck holdings**. Filters by direction, asset type and account. |
 | `/portfolio` | Portfolio | Holdings grouped by account, with period gains (1D/1W/1M/YTD), Plotly price charts and summary totals. Add/sell/cover/update stock positions; add/close option positions. |
 | `/research` | Research | Single-stock lookup. Searches DB first, falls back to live yfinance fetch. Shows chart + metrics. |
 | `/momentum` | Momentum | Screener table filterable by market cap and % above MA-100, with a bearish view. Click for chart modal. |
@@ -233,6 +251,15 @@ Start with `python run_web_app.py` (default: `http://127.0.0.1:8051`).
 | `GET` | `/api/crypto/symbols` | Returns configured symbol list, MA period, timeframe |
 | `GET` | `/get_stock_plot/<ticker>` | Returns Plotly JSON + metrics for modal chart |
 | `GET` | `/get_crypto_plot/<instrument>` | Returns crypto metrics for modal |
+| `GET` | `/api/recommendations/latest` | Today's data: latest run, recommendations with decisions, expired signals, heat, summary, skipped and stale holdings |
+| `POST` | `/api/recommendations/decision` | Journal a signal: `{signal_key, first_seen_at, status: pending\|taken\|skipped, note?}` |
+| `POST` | `/api/recommendations/recheck` | Re-evaluate holdings and the watch list on fresh bars (`409` while a job holds the lock) |
+| `GET` / `POST` | `/api/accounts` | List accounts, or create/update one (`name, equity, cash, allow_short`) |
+| `DELETE` | `/api/accounts/<name>` | Delete an account (refused while positions reference it) |
+| `POST` | `/api/accounts/<name>/rename` | Rename an account; its positions move with it |
+| `GET` | `/api/trend/positions`, `/api/trend/scan`, `/api/trend/chart/<ticker>`, `/api/trend/backtest` | Trend tab: position rules, watchlist breakouts, chart, backtest |
+| `GET` / `POST` / `DELETE` | `/api/trend/watchlist`, `/api/trend/watchlist/<ticker>` | Trend watchlist |
+| `POST` / `GET` / `DELETE` | `/api/review/import`, `/api/review/accounts`, `/api/review/summary`, `/api/review/fills` | Trade Review: broker CSV import, accounts, summary, clear fills |
 
 Charts use Plotly (`plotly_dark` theme). Portfolio/research charts are rendered server-side as HTML; momentum/crypto modals are rendered client-side from JSON.
 
@@ -251,8 +278,9 @@ For corporate proxy environments, set `DISABLE_SSL_VERIFY=true` in `.env`.
 
 1. Start the web app and open **Today → Accounts**. Create one account per brokerage account and enter its equity and cash: for example a Roth IRA with **Allow short** off and a taxable account with it on. Sizing and the heat budget use the total equity across accounts.
 2. The DB seeds a `default` account (`DEFAULT_ACCOUNT`) that **allows shorts**, so existing positions have a home. Rename it to one of your real accounts (its positions move with it), or delete it once it holds no positions.
-3. Run one full weekly job to warm the cache: `.venv/bin/python -m src.jobs weekly --no-notify`. The first run downloads daily history since 2015 for every ticker in the universe, so it takes much longer than later runs.
-4. Install the schedule: `scripts/install_launchd.sh`.
+3. Install the schedule: `scripts/install_launchd.sh`.
+4. Warm the cache with one full weekly run, either by hand (`.venv/bin/python -m src.jobs weekly --no-notify`) or through launchd (`launchctl kickstart -k gui/$(id -u)/com.tradinggui.weekly`; follow `logs/weekly.err.log`). The first run downloads daily history since 2015 for every ticker in the universe, and fundamentals for up to `FUNDAMENTALS_MAX_PER_RUN` tickers, so it takes much longer than later runs.
+5. If you import broker fills on Trade Review, name your accounts the same as the broker export's account names so positions get their real entry dates (see Data).
 
 ## Usage
 
@@ -278,10 +306,10 @@ Settings are managed via `pydantic-settings` and can be overridden in `.env`:
 | Variable | Default | Description |
 |---|---|---|
 | `DB_PATH` | `data/processed/stock_metrics_v2.db` | SQLite path |
-| `HISTORICAL_LOOKBACK_DAYS` | `400` | Days of stock history to fetch |
+| `HISTORICAL_LOOKBACK_DAYS` | `400` | Days of history for single-ticker fetches (Research, Add stock) |
 | `RECENT_DATA_AGE_LIMIT_DAYS` | `1` | Stock freshness threshold |
-| `MAX_CONCURRENT_WORKERS` | `3` | Parallel fetch workers |
-| `REQUESTS_PER_SECOND` | `0.5` | yfinance rate limit |
+| `MAX_CONCURRENT_WORKERS` | `3` | Parallel fetch workers (single-ticker paths) |
+| `REQUESTS_PER_SECOND` | `0.5` | yfinance rate limit for single-ticker history fetches |
 | `CRYPTO_MA_PERIOD` | `50` | Crypto MA window |
 | `CRYPTO_DEFAULT_TIMEFRAME` | `1D` | Candle interval |
 | `CRYPTO_DATA_AGE_LIMIT_MINUTES` | `5` | Crypto freshness threshold |
@@ -309,6 +337,7 @@ Trend-following and job settings (`src/config/settings.py`, also overridable in 
 | `FUNDAMENTALS_MAX_PER_RUN` | `1000` | Fundamentals fetched per run, beyond holdings |
 | `FUNDAMENTALS_REQUESTS_PER_SECOND` | `1.0` | Rate limit for `.info` calls |
 | `DOWNLOAD_CHUNK_SIZE` | `100` | Tickers per batched bar download |
+| `BATCH_REQUESTS_PER_SECOND` | `0.5` | Rate limit for batched bar downloads |
 | `TICKER_MAX_CONSECUTIVE_FAILURES` / `TICKER_SKIP_DAYS` | `3` / `28` | Skip-list threshold and duration |
 | `DEFAULT_ACCOUNT` | `default` | Name of the seeded account |
 | `SLACK_WEBHOOK_URL` | unset | Slack incoming webhook for the digest (set in the environment or `.env`) |
