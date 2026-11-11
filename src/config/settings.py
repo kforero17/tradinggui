@@ -30,6 +30,49 @@ class Settings(BaseSettings):
     # Data Sources
     SP500_CSV_PATH: Path = RAW_DATA_DIR / "sp500.csv"
     NASDAQ_CSV_PATH: Path = RAW_DATA_DIR / "nasdaq.csv"
+    # All US listings (NASDAQ, NYSE, ARCA, ...) from the NASDAQ Trader symbol directory
+    LISTED_CSV_PATH: Path = RAW_DATA_DIR / "us_listed.csv"
+    UNIVERSE_INCLUDE_ETFS: bool = True
+    UNIVERSE_MIN_SP500_ROWS: int = 490
+    UNIVERSE_MIN_LISTED_ROWS: int = 5000
+
+    # Batched price downloads (one yf.download call per chunk)
+    DOWNLOAD_CHUNK_SIZE: int = 100
+    BATCH_REQUESTS_PER_SECOND: float = 0.5
+
+    # Fundamentals (.info) are refreshed on a rotation, not every run
+    FUNDAMENTALS_MAX_AGE_DAYS: int = 28
+    FUNDAMENTALS_REQUESTS_PER_SECOND: float = 1.0
+    # Caps one run's .info calls so a mostly-stale universe spreads over several weeks
+    FUNDAMENTALS_MAX_PER_RUN: int = 1000
+
+    # Tickers that keep failing are skipped for a while
+    TICKER_MAX_CONSECUTIVE_FAILURES: int = 3
+    TICKER_SKIP_DAYS: int = 28
+
+    # Trend-following universe and recommendations
+    UNIVERSE_MIN_PRICE: float = 5.0
+    UNIVERSE_MIN_DOLLAR_VOLUME: float = 10_000_000
+    UNIVERSE_LIQUIDITY_LOOKBACK_DAYS: int = 50
+    # Daily-reset decay makes leveraged/inverse ETFs poor trend-following vehicles
+    UNIVERSE_EXCLUDE_LEVERAGED_ETFS: bool = True
+    TREND_SYSTEM: str = "S2"
+    TREND_RISK_PER_UNIT: float = 0.005
+    TREND_MAX_UNIT_FRACTION: float = 0.10
+    # Dashboard shows only the best-scoring WATCH rows; ENTER rows are never capped
+    MAX_WATCH_ROWS: int = 30
+    MAX_PORTFOLIO_HEAT_PCT: float = 0.10
+    REGIME_BENCHMARK: str = "SPY"
+
+    # Accounts
+    DEFAULT_ACCOUNT: str = "default"
+
+    # Jobs and notifications
+    # The weekly job backs up the DB to <db dir>/backups before writing; newest N kept
+    DB_BACKUP_KEEP: int = 8
+    REPORTS_DIR: Path = DATA_DIR / "reports"
+    JOB_LOCK_PATH: Path = DATA_DIR / ".job.lock"
+    SLACK_WEBHOOK_URL: Optional[str] = None
 
     # Crypto Settings
     CRYPTO_TABLE_NAME: str = "crypto_metrics"

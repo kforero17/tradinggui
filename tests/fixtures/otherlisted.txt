@@ -1,0 +1,13 @@
+ACT Symbol|Security Name|Exchange|CQS Symbol|ETF|Round Lot Size|Test Issue|NASDAQ Symbol
+A|Agilent Technologies, Inc. Common Stock|N|A|N|100|N|A
+AAC.U|Ares Acquisition Corporation III Units, each consisting of one Class A ordinary share and one-tenth of one redeemable warrant|N|AAC.U|N|100|N|AAC=
+AAC.W|Ares Acquisition Corporation III Redeemable warrants, each whole warrant exercisable for one Class A ordinary share at an exercise price of $11.50|N|AAC.WS|N|100|N|AAC+
+AIIA.R|AI Infrastructure Acquisition Corp. Rights, each entitling the holder to receive one-fifth (1/5) of one Class A Ordinary Share|N|AIIAr|N|100|N|AIIA^
+ATEST|Tick Pilot Test Control Common Stock|A|ATEST|N|100|Y|ATEST
+BF.B|Brown Forman Inc Class B Common Stock|N|BF.B|N|100|N|BF.B
+BFH$A|Bread Financial Holdings, Inc. Depositary Shares, each representing a 1/40th interest in a share of 8.625% Non-Cumulative Perpetual Preferred Stock, Series A|N|BFHpA|N|100|N|BFH-A
+BRK.B|Berkshire Hathaway Inc. New Common Stock|N|BRK.B|N|40|N|BRK.B
+ET|Energy Transfer LP Common Units|F|ET|N|100|N|ET
+JPM|JP Morgan Chase & Co. Common Stock|N|JPM|N|40|N|JPM
+SPY|State Street SPDR S&P 500 ETF Trust|P|SPY|Y|40|N|SPY
+File Creation Time: 1110202611:01||||||

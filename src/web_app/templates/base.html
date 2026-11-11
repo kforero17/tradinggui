@@ -9,8 +9,9 @@
 </head>
 <body>
     <nav class="navbar">
-        <a href="{{ url_for('portfolio') }}" class="navbar-brand">TradingGUI</a>
+        <a href="{{ url_for('today') }}" class="navbar-brand">TradingGUI</a>
         <div class="navbar-links">
+            <a href="{{ url_for('today') }}" class="{{ 'active' if active_page == 'today' }}">Today</a>
             <a href="{{ url_for('portfolio') }}" class="{{ 'active' if active_page == 'portfolio' }}">Portfolio</a>
             <a href="{{ url_for('research') }}" class="{{ 'active' if active_page == 'research' }}">Research</a>
             <a href="{{ url_for('momentum') }}" class="{{ 'active' if active_page == 'momentum' }}">Momentum</a>

@@ -41,3 +41,6 @@ data/processed/*.db-shm
 data/processed/*.db-journal
 data/reports/
 data/.job.lock
+data/processed/*.bak*
+data/processed/backups/
+data/processed/corrupt-*/

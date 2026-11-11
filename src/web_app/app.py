@@ -1,5 +1,5 @@
-from typing import Optional, List, Dict, Any
-from datetime import datetime
+from typing import Optional, List, Dict, Any, Tuple
+from datetime import datetime, timezone
 from enum import Enum
 import numpy as np
 import pandas as pd
@@ -9,7 +9,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import plotly.io as pio
 
-from ..data.database import db
+from ..data.database import SIGNAL_DECISION_STATUSES, db
 from ..data.crypto_feed import crypto_feed
 from ..analysis.metrics import (
     metrics_calculator,
@@ -23,8 +23,10 @@ from ..analysis.crypto_metrics import crypto_metrics_calculator
 from ..analysis.deep_research import deep_research_analyzer
 from ..analysis.risk_analyzer import portfolio_risk_analyzer
 from ..analysis.screener import quant_screener
+from ..analysis import recommendation_service
 from ..analysis.trade_review import run_review
 from ..analysis.turtle import (
+    Direction,
     PositionStatus,
     TurtleConfig,
     TurtleSystem,
@@ -38,6 +40,7 @@ from ..data.broker_import import UnsupportedFormatError, parse_export
 from ..data.price_history import get_daily_ohlc, get_histories
 from ..config.security import security_config
 from ..config.settings import settings
+from ..jobs.pipeline import JobAlreadyRunning, job_lock
 
 app = Flask(__name__)
 app.secret_key = security_config.get_secret_key()
@@ -718,9 +721,113 @@ def research():
     )
 
 
+# Weekly runs older than this make the Today page show a STALE warning.
+WEEKLY_RUN_STALE_DAYS = 8
+ACCOUNT_NAME_MAX_LENGTH = 64
+
+
 @app.route("/")
+def today():
+    """Today: the action dashboard read from the latest stored recommendation run."""
+    return render_template(
+        "today.html",
+        stale_days=WEEKLY_RUN_STALE_DAYS,
+        default_account=settings.DEFAULT_ACCOUNT,
+    )
+
+
+def _account_names() -> List[str]:
+    return [a["name"] for a in db.get_accounts()]
+
+
+def _form_account() -> str:
+    """The account a portfolio form posts, or the default account for older forms."""
+    return request.form.get("account", "").strip() or settings.DEFAULT_ACCOUNT
+
+
+def _holding_account(ticker: str, action: str) -> Optional[str]:
+    """The one account holding ``ticker``, for links and forms that name no account.
+
+    Flashes an error and returns None when several accounts hold it (``action``,
+    e.g. "delete", names what to do per account instead), and a warning when none does.
+    """
+    accounts = sorted(
+        {p["account"] for p in db.get_portfolio_with_shares() if p["ticker"] == ticker}
+    )
+    if len(accounts) == 1:
+        return accounts[0]
+    if accounts:
+        flash(
+            f"{ticker} is held in several accounts ({', '.join(accounts)}); "
+            f"{action} it from its account on the Portfolio page.",
+            "error",
+        )
+    else:
+        flash(f"No position {ticker} in any account.", "warning")
+    return None
+
+
+def _form_position_account(ticker: str, action: str) -> Optional[str]:
+    """The account a form posts for an existing position, else the one holding it.
+
+    Returns None, having flashed why, when the form names no account and the
+    holdings don't settle it.
+    """
+    return request.form.get("account", "").strip() or _holding_account(ticker, action)
+
+
+def _flash_no_position(ticker: str, account: str) -> None:
+    flash(f"No position {ticker} in account {account}.", "warning")
+
+
+def _account_groups(
+    portfolio_metrics: List[Dict[str, Any]],
+    option_metrics: List[Dict[str, Any]],
+    realized_gains: Dict[str, Any],
+    account_names: List[str],
+) -> List[Dict[str, Any]]:
+    """Positions and options grouped by account, each with a calculate_portfolio_summary subtotal.
+
+    Accounts with no stock or option positions are left out. Realized gains
+    without an account belong to the default account.
+    """
+    realized_by_account: Dict[str, float] = {}
+    for gain in realized_gains.get("gains", []):
+        name = gain.get("account") or settings.DEFAULT_ACCOUNT
+        realized_by_account[name] = realized_by_account.get(name, 0.0) + (
+            gain.get("realized_gain") or 0.0
+        )
+    held = {p["account"] for p in portfolio_metrics} | {
+        o.get("account") or settings.DEFAULT_ACCOUNT for o in option_metrics
+    }
+    ordered = [n for n in account_names if n in held] + sorted(
+        held - set(account_names)
+    )
+    groups = []
+    for name in ordered:
+        stocks = [p for p in portfolio_metrics if p["account"] == name]
+        options = [
+            o
+            for o in option_metrics
+            if (o.get("account") or settings.DEFAULT_ACCOUNT) == name
+        ]
+        groups.append(
+            {
+                "account": name,
+                "positions": stocks,
+                "options": options,
+                "summary": calculate_portfolio_summary(
+                    stocks + options, realized_by_account.get(name, 0.0)
+                ),
+            }
+        )
+    return groups
+
+
+@app.route("/portfolio")
 def portfolio():
-    """Main portfolio page with value and gain calculations."""
+    """Portfolio page with value and gain calculations, grouped by account."""
+    accounts = _account_names()
     try:
         positions = db.get_portfolio_with_shares()
         ytd_realized = db.get_ytd_realized_gains()
@@ -747,6 +854,10 @@ def portfolio():
                 options=option_metrics,
                 summary=summary,
                 realized_gains=ytd_realized,
+                accounts=accounts,
+                account_groups=_account_groups(
+                    [], option_metrics, ytd_realized, accounts
+                ),
             )
 
         all_metrics_df = db.get_latest_metrics()
@@ -761,8 +872,13 @@ def portfolio():
                 options=option_metrics,
                 summary=None,
                 realized_gains=ytd_realized,
+                accounts=accounts,
+                account_groups=[],
             )
 
+        # A ticker held in several accounts is fetched and plotted once per page load.
+        histories: Dict[str, Optional[pd.DataFrame]] = {}
+        plots: Dict[str, Optional[str]] = {}
         for position in positions:
             ticker = position["ticker"]
             shares = position["shares"] or 0.0
@@ -774,7 +890,10 @@ def portfolio():
 
             stock_data = ticker_df.iloc[0].to_dict()
 
-            hist_data = metrics_calculator._get_historical_data(ticker)
+            if ticker not in histories:
+                histories[ticker] = metrics_calculator._get_historical_data(ticker)
+                plots[ticker] = create_stock_plot(histories[ticker], ticker)
+            hist_data = histories[ticker]
 
             gains = calculate_period_gains(hist_data, shares, position.get("added_at"))
 
@@ -791,8 +910,9 @@ def portfolio():
             )
             current_value = current_price * shares
 
+            stock_data["account"] = position["account"]
             stock_data["last_price"] = current_price
-            stock_data["plot"] = create_stock_plot(hist_data, ticker)
+            stock_data["plot"] = plots[ticker]
             stock_data["shares"] = shares
             stock_data["cost_basis"] = cost_basis
             stock_data["current_value"] = current_value
@@ -816,6 +936,10 @@ def portfolio():
             options=option_metrics,
             summary=summary,
             realized_gains=ytd_realized,
+            accounts=accounts,
+            account_groups=_account_groups(
+                portfolio_metrics, option_metrics, ytd_realized, accounts
+            ),
         )
     except Exception as e:
         logger.error(f"Error loading portfolio page: {e}")
@@ -826,17 +950,20 @@ def portfolio():
             options=[],
             summary=None,
             realized_gains=None,
+            accounts=accounts,
+            account_groups=[],
         )
 
 
 @app.route("/add_stock", methods=["POST"])
 def add_stock():
-    """Add a stock to the portfolio with optional share quantity and cost basis."""
+    """Add a stock to an account's portfolio with optional share quantity and cost basis."""
     ticker = request.form.get("ticker", "").upper().strip()
     shares_str = request.form.get("shares", "0")
     cost_basis_str = request.form.get("cost_basis", "0")
     side = request.form.get("side", "long")
     source_page = request.form.get("source_page", "portfolio")
+    account = _form_account()
 
     if not ticker:
         flash("Ticker symbol cannot be empty.", "warning")
@@ -845,11 +972,15 @@ def add_stock():
     try:
         shares = abs(float(shares_str)) if shares_str else 0.0
         cost_basis = float(cost_basis_str) if cost_basis_str else 0.0
-        if side == "short":
-            shares = -shares
+    except ValueError:
+        flash("Invalid share quantity or cost basis.", "error")
+        return redirect(url_for("portfolio"))
+    if side == "short":
+        shares = -shares
 
-        if ticker in db.get_portfolio_tickers():
-            flash(f"{ticker} is already in your portfolio.", "info")
+    try:
+        if ticker in db.get_portfolio_tickers(account=account):
+            flash(f"{ticker} is already in the {account} account.", "info")
         else:
             if db.get_latest_metrics(ticker=ticker).empty:
                 logger.info(
@@ -870,13 +1001,15 @@ def add_stock():
                         )
                     )
 
-            db.add_portfolio_ticker(ticker, cost_basis=cost_basis)
-            if shares != 0:
-                db.update_portfolio_shares(ticker, shares)
-            flash(f"{ticker} has been added to your portfolio.", "success")
+            # Shares go in with the row, so a refused short leaves nothing behind.
+            db.add_portfolio_ticker(
+                ticker, cost_basis=cost_basis, shares=shares, account=account
+            )
+            flash(f"{ticker} has been added to the {account} account.", "success")
 
-    except ValueError:
-        flash("Invalid share quantity or cost basis.", "error")
+    except ValueError as e:
+        # Unknown account, or a short in an account that doesn't allow them
+        flash(str(e), "error")
     except Exception as e:
         logger.error(f"Error adding stock {ticker}: {e}")
         flash(f"An error occurred while adding {ticker}.", "error")
@@ -895,10 +1028,21 @@ def update_shares():
 
     try:
         shares = float(shares_str)
-        db.update_portfolio_shares(ticker, shares)
-        flash(f"Updated {ticker} to {shares} shares.", "success")
     except ValueError:
         flash("Invalid share quantity.", "error")
+        return redirect(url_for("portfolio"))
+
+    try:
+        account = _form_position_account(ticker, "update")
+        if account is None:
+            return redirect(url_for("portfolio"))
+
+        if db.update_portfolio_shares(ticker, shares, account=account):
+            flash(f"Updated {ticker} ({account}) to {shares} shares.", "success")
+        else:
+            _flash_no_position(ticker, account)
+    except ValueError as e:
+        flash(str(e), "error")
     except Exception as e:
         logger.error(f"Error updating shares for {ticker}: {e}")
         flash(f"Error updating shares: {e}", "error")
@@ -918,8 +1062,17 @@ def update_cost_basis():
             flash("Cost basis cannot be negative.", "warning")
             return redirect(url_for("portfolio"))
 
-        db.update_portfolio_cost_basis(ticker, cost_basis)
-        flash(f"Updated {ticker} cost basis to ${cost_basis:.2f}.", "success")
+        account = _form_position_account(ticker, "update")
+        if account is None:
+            return redirect(url_for("portfolio"))
+
+        if db.update_portfolio_cost_basis(ticker, cost_basis, account=account):
+            flash(
+                f"Updated {ticker} ({account}) cost basis to ${cost_basis:.2f}.",
+                "success",
+            )
+        else:
+            _flash_no_position(ticker, account)
     except ValueError:
         flash("Invalid cost basis.", "error")
     except Exception as e:
@@ -929,9 +1082,38 @@ def update_cost_basis():
     return redirect(url_for("portfolio"))
 
 
+@app.route("/move_stock", methods=["POST"])
+def move_stock():
+    """Move a position to another account without recording a sale."""
+    ticker = request.form.get("ticker", "").upper().strip()
+    to_account = request.form.get("to_account", "").strip()
+    if not ticker or not to_account:
+        flash("Choose a position and an account to move it to.", "warning")
+        return redirect(url_for("portfolio"))
+
+    try:
+        account = _form_position_account(ticker, "move")
+        if account is None:
+            return redirect(url_for("portfolio"))
+        if to_account == account:
+            flash(f"{ticker} is already in the {account} account.", "info")
+        elif db.move_portfolio_position(ticker, account, to_account):
+            flash(f"Moved {ticker} from {account} to {to_account}.", "success")
+        else:
+            _flash_no_position(ticker, account)
+    except ValueError as e:
+        # Unknown target, target already holds it, or a short into a long-only account
+        flash(str(e), "error")
+    except Exception as e:
+        logger.error(f"Error moving stock {ticker}: {e}")
+        flash(f"An error occurred while moving {ticker}.", "error")
+
+    return redirect(url_for("portfolio"))
+
+
 @app.route("/sell_stock", methods=["POST"])
 def sell_stock():
-    """Sell a stock from the portfolio and record YTD realized gain."""
+    """Sell a stock from an account's portfolio and record YTD realized gain."""
     ticker = request.form.get("ticker", "").upper().strip()
     sale_price_str = request.form.get("sale_price", "")
 
@@ -945,10 +1127,16 @@ def sell_stock():
             flash("Sale price cannot be negative.", "warning")
             return redirect(url_for("portfolio"))
 
+        account = _form_position_account(ticker, "sell")
+        if account is None:
+            return redirect(url_for("portfolio"))
+
         hist_data = metrics_calculator._get_historical_data(ticker)
         year_start_price = get_year_start_price(hist_data)
 
-        realized_gain = db.sell_position(ticker, sale_price, year_start_price)
+        realized_gain = db.sell_position(
+            ticker, sale_price, year_start_price, account=account
+        )
 
         if realized_gain is not None:
             gain_word = "gain" if realized_gain >= 0 else "loss"
@@ -956,11 +1144,12 @@ def sell_stock():
                 f" (Jan 1 price: ${year_start_price:.2f})" if year_start_price else ""
             )
             flash(
-                f"Sold {ticker}. YTD realized {gain_word}: ${abs(realized_gain):.2f}{year_start_msg}",
+                f"Sold {ticker} ({account}). YTD realized {gain_word}: "
+                f"${abs(realized_gain):.2f}{year_start_msg}",
                 "success",
             )
         else:
-            flash(f"{ticker} not found in portfolio.", "warning")
+            flash(f"{ticker} not found in the {account} account.", "warning")
 
     except ValueError:
         flash("Invalid sale price.", "error")
@@ -971,17 +1160,31 @@ def sell_stock():
     return redirect(url_for("portfolio"))
 
 
-@app.route("/delete_stock/<ticker>")
-def delete_stock(ticker: str):
-    """Delete a stock from the portfolio without recording realized gain."""
+@app.route("/delete_stock/<account>/<ticker>")
+def delete_stock(account: str, ticker: str):
+    """Delete a stock from an account's portfolio without recording realized gain."""
     try:
-        db.delete_portfolio_ticker(ticker)
-        flash(f"{ticker} has been removed from your portfolio.", "success")
+        if db.delete_portfolio_ticker(ticker, account=account):
+            flash(f"{ticker} has been removed from the {account} account.", "success")
+        else:
+            _flash_no_position(ticker, account)
     except Exception as e:
-        logger.error(f"Error deleting stock {ticker}: {e}")
+        logger.error(f"Error deleting stock {ticker} ({account}): {e}")
         flash(f"An error occurred while removing {ticker}.", "error")
 
     return redirect(url_for("portfolio"))
+
+
+@app.route("/delete_stock/<ticker>")
+def delete_stock_legacy(ticker: str):
+    """Pre-accounts delete link: removes the ticker from the one account holding it.
+
+    Refused, with a flash, when several accounts hold it or none does.
+    """
+    account = _holding_account(ticker, "delete")
+    if account is None:
+        return redirect(url_for("portfolio"))
+    return delete_stock(account, ticker)
 
 
 @app.route("/add_option", methods=["POST"])
@@ -990,9 +1193,13 @@ def add_option():
     underlying = request.form.get("underlying", "").upper().strip()
     option_type = request.form.get("option_type", "")
     side = request.form.get("side", "long")
+    account = _form_account()
 
     if not underlying or option_type not in ("call", "put"):
         flash("Underlying and option type (call/put) are required.", "warning")
+        return redirect(url_for("portfolio"))
+    if account not in _account_names():
+        flash(f"Unknown account '{account}'", "error")
         return redirect(url_for("portfolio"))
 
     try:
@@ -1010,10 +1217,11 @@ def add_option():
             contracts = -contracts
 
         db.add_option_position(
-            underlying, option_type, strike, expiry, contracts, premium
+            underlying, option_type, strike, expiry, contracts, premium, account=account
         )
         flash(
-            f"Added {contracts:g} {underlying} {expiry} ${strike:g} {option_type} contracts.",
+            f"Added {contracts:g} {underlying} {expiry} ${strike:g} {option_type} "
+            f"contracts to {account}.",
             "success",
         )
     except (KeyError, ValueError):
@@ -1740,6 +1948,7 @@ def _position_status_dict(status: PositionStatus) -> Dict[str, Any]:
     exit_event = status.first_exit
     return {
         "ticker": status.ticker,
+        "direction": status.direction.name,
         "last_date": status.last_date,
         "last_close": status.last_close,
         "shares": status.shares,
@@ -1776,12 +1985,18 @@ def _trend_watchlist() -> List[str]:
     return tickers
 
 
+def _default_trend_equity() -> float:
+    """Total stored account equity, or DEFAULT_TREND_EQUITY when no account has equity."""
+    equity = db.total_equity()
+    return equity if equity > 0 else DEFAULT_TREND_EQUITY
+
+
 @app.route("/trend")
 def trend():
     """Turtle trend-following rules for open positions and the watchlist."""
     return render_template(
         "trend.html",
-        default_equity=DEFAULT_TREND_EQUITY,
+        default_equity=_default_trend_equity(),
         default_risk_pct=DEFAULT_RISK_PER_UNIT_PCT,
         default_unit_cap_pct=DEFAULT_UNIT_CAP_PCT,
     )
@@ -1789,37 +2004,48 @@ def trend():
 
 @app.route("/api/trend/positions")
 def api_trend_positions():
-    equity = _float_arg("equity", DEFAULT_TREND_EQUITY)
+    equity = _float_arg("equity", _default_trend_equity())
     config = _turtle_config_from_request()
-    statuses, skipped, histories = [], [], {}
+    # (account, status) per held position: the same ticker can be held in several accounts.
+    statuses: List[tuple] = []
+    skipped, histories = [], {}
     for position in db.get_portfolio_with_shares():
-        ticker, shares = position["ticker"], position["shares"]
-        if shares <= 0 or not position["cost_basis"]:
+        account, ticker, shares = (
+            position["account"],
+            position["ticker"],
+            position["shares"],
+        )
+        if shares == 0 or not position["cost_basis"]:
             skipped.append(
                 {
                     "ticker": ticker,
-                    "reason": "Short or missing cost basis; rules are long-only",
+                    "account": account,
+                    "reason": "No shares or missing cost basis",
                 }
             )
             continue
         try:
-            ohlc = get_daily_ohlc(ticker)
-            histories[ticker] = ohlc
+            if ticker not in histories:
+                histories[ticker] = get_daily_ohlc(ticker)
             status = evaluate_position(
                 ticker,
-                ohlc,
+                histories[ticker],
                 shares,
-                position["cost_basis"] / shares,
+                position["cost_basis"] / abs(shares),
                 position["added_at"] or datetime.utcnow(),
                 equity,
                 config,
             )
-            statuses.append(status)
+            statuses.append((account, status))
         except Exception as e:
-            logger.exception(f"Could not evaluate {ticker}")
-            skipped.append({"ticker": ticker, "reason": str(e)})
+            logger.exception(f"Could not evaluate {ticker} ({account})")
+            skipped.append({"ticker": ticker, "account": account, "reason": str(e)})
 
-    units = {s.ticker: s.units_held for s in statuses if np.isfinite(s.units_held)}
+    # Unit limits apply per ticker, so units held in several accounts are summed (signed).
+    units: Dict[str, float] = {}
+    for _, s in statuses:
+        if np.isfinite(s.units_held):
+            units[s.ticker] = units.get(s.ticker, 0.0) + s.units_held
     breaches = (
         unit_limit_breaches(units, correlation_matrix(histories), config)
         if histories
@@ -1827,7 +2053,7 @@ def api_trend_positions():
     )
     order = {"EXIT_STOP": 0, "EXIT_CHANNEL": 1, "ADD_UNIT": 2, "HOLD": 3}
     rows = sorted(
-        (_position_status_dict(s) for s in statuses),
+        ({**_position_status_dict(s), "account": account} for account, s in statuses),
         key=lambda r: order[r["action"].value],
     )
     return jsonify(
@@ -1837,7 +2063,7 @@ def api_trend_positions():
                 "positions": rows,
                 "skipped": skipped,
                 "unit_limit_breaches": breaches,
-                "total_open_risk": sum(s.open_risk_dollars for s in statuses),
+                "total_open_risk": sum(s.open_risk_dollars for _, s in statuses),
                 "config": {
                     "system": config.system,
                     "entry_period": config.entry_period,
@@ -1851,7 +2077,7 @@ def api_trend_positions():
 
 @app.route("/api/trend/scan")
 def api_trend_scan():
-    equity = _float_arg("equity", DEFAULT_TREND_EQUITY)
+    equity = _float_arg("equity", _default_trend_equity())
     config = _turtle_config_from_request()
     tickers = _trend_watchlist()
     histories = get_histories(tickers)
@@ -1923,20 +2149,39 @@ def api_trend_chart(ticker: str):
             line={"color": "#ffc107", "width": 1.5},
         )
     )
+    # With ?account= the stop is that account's position; otherwise the first account holding it.
+    account = request.args.get("account", "").strip()
     position = next(
-        (p for p in db.get_portfolio_with_shares() if p["ticker"] == ticker.upper()),
+        (
+            p
+            for p in db.get_portfolio_with_shares(account=account or None)
+            if p["ticker"] == ticker.upper() and p["shares"] and p["cost_basis"]
+        ),
         None,
     )
-    if position and position["shares"] > 0 and position["cost_basis"]:
+    if position:
         status = evaluate_position(
             ticker,
             full,
             position["shares"],
-            position["cost_basis"] / position["shares"],
+            position["cost_basis"] / abs(position["shares"]),
             position["added_at"] or datetime.utcnow(),
-            DEFAULT_TREND_EQUITY,
+            _float_arg("equity", _default_trend_equity()),
             config,
         )
+        if status.direction is Direction.SHORT:
+            # A short exits on the exit-period high, not the low.
+            fig.add_trace(
+                go.Scatter(
+                    x=ohlc.index,
+                    y=full["high"]
+                    .rolling(config.exit_period)
+                    .max()
+                    .reindex(ohlc.index),
+                    name=f"{config.exit_period}-day high (short exit)",
+                    line={"color": "#FF69B4", "width": 1.5},
+                )
+            )
         fig.add_hline(
             y=status.stop_price,
             line={"color": "#dc3545", "dash": "dash"},
@@ -1960,7 +2205,7 @@ def api_trend_chart(ticker: str):
 @app.route("/api/trend/backtest")
 def api_trend_backtest():
     config = _turtle_config_from_request()
-    starting_equity = _float_arg("equity", DEFAULT_TREND_EQUITY)
+    starting_equity = _float_arg("equity", _default_trend_equity())
     histories = {
         t: h.loc[BACKTEST_START:] for t, h in get_histories(_trend_watchlist()).items()
     }
@@ -1998,6 +2243,211 @@ def api_trend_backtest():
             }
         )
     )
+
+
+# ═══════════════════════════════════════════════════════════════════
+# TODAY: RECOMMENDATIONS, JOURNAL AND ACCOUNTS
+# ═══════════════════════════════════════════════════════════════════
+
+
+def _json_error(message: str, status: int) -> Tuple[Any, int]:
+    return jsonify({"success": False, "error": message}), status
+
+
+def _parse_iso_datetime(raw: Any) -> datetime:
+    """Parse an ISO timestamp from JS into the naive UTC datetime the DB stores."""
+    if not isinstance(raw, str) or not raw.strip():
+        raise ValueError("first_seen_at must be an ISO datetime string")
+    text = raw.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    parsed = datetime.fromisoformat(text)
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return parsed
+
+
+def _weekly_run_status(now: Optional[datetime] = None) -> Dict[str, Any]:
+    """When the last weekly run happened and whether it is older than WEEKLY_RUN_STALE_DAYS."""
+    weekly = db.get_latest_run(job="weekly")
+    if weekly is None:
+        return {"latest_weekly_run_at": None, "weekly_age_days": None, "stale": True}
+    age_days = ((now or datetime.utcnow()) - weekly["run_at"]).total_seconds() / 86400
+    return {
+        "latest_weekly_run_at": weekly["run_at"].isoformat(),
+        "weekly_age_days": round(age_days, 2),
+        "stale": age_days > WEEKLY_RUN_STALE_DAYS,
+    }
+
+
+@app.route("/api/recommendations/latest")
+def api_recommendations_latest():
+    try:
+        dashboard = recommendation_service.latest_dashboard()
+        weekly = _weekly_run_status()
+    except Exception as e:
+        logger.exception("Could not load the latest recommendations")
+        return _json_error(f"Could not load recommendations: {e}", 500)
+    return jsonify(
+        _json_safe(
+            {
+                "success": True,
+                **dashboard,
+                "weekly": {**weekly, "stale_days": WEEKLY_RUN_STALE_DAYS},
+            }
+        )
+    )
+
+
+@app.route("/api/recommendations/decision", methods=["POST"])
+def api_recommendations_decision():
+    """Journal a signal: JSON {signal_key, first_seen_at, status, note?}."""
+    payload = request.get_json(silent=True) or {}
+    signal_key = payload.get("signal_key")
+    status = payload.get("status")
+    note = payload.get("note")
+    if not isinstance(signal_key, str) or not signal_key.strip():
+        return _json_error("signal_key is required", 400)
+    if status not in SIGNAL_DECISION_STATUSES:
+        return _json_error(
+            f"status must be one of {', '.join(SIGNAL_DECISION_STATUSES)}", 400
+        )
+    if note is not None and not isinstance(note, str):
+        return _json_error("note must be a string", 400)
+    try:
+        first_seen_at = _parse_iso_datetime(payload.get("first_seen_at"))
+    except ValueError as e:
+        return _json_error(f"Invalid first_seen_at: {e}", 400)
+
+    db.upsert_signal_decision(signal_key, first_seen_at, status, note)
+    decision = next(
+        (
+            d
+            for d in db.get_signal_decisions([signal_key])
+            if d["first_seen_at"] == first_seen_at
+        ),
+        None,
+    )
+    return jsonify(
+        {
+            "success": True,
+            "decision": {
+                "status": decision["status"],
+                "note": decision["note"],
+                "decided_at": decision["decided_at"].isoformat()
+                if decision["decided_at"]
+                else None,
+            }
+            if decision
+            else None,
+        }
+    )
+
+
+@app.route("/api/recommendations/recheck", methods=["POST"])
+def api_recommendations_recheck():
+    """Re-evaluate holdings only (the daily job's logic) and store a manual run.
+
+    Takes the job lock so it never overlaps a scheduled job; 409 while one runs.
+    """
+    try:
+        with job_lock():
+            run_id = recommendation_service.generate_run(
+                "manual", include_entries=False, refresh=True
+            )
+    except JobAlreadyRunning:
+        logger.info("Recheck refused: a scheduled job holds the job lock")
+        return _json_error("A scheduled job is running; try again shortly", 409)
+    except Exception as e:
+        logger.exception("Recheck holdings failed")
+        return _json_error(f"Recheck failed: {e}", 500)
+    return jsonify({"success": True, "run_id": run_id})
+
+
+def _accounts_payload() -> Dict[str, Any]:
+    accounts = db.get_accounts()
+    return {
+        "success": True,
+        "accounts": [
+            {
+                **a,
+                "updated_at": a["updated_at"].isoformat() if a["updated_at"] else None,
+            }
+            for a in accounts
+        ],
+        "total_equity": db.total_equity(),
+        "default_account": settings.DEFAULT_ACCOUNT,
+    }
+
+
+def _validate_account_name(raw: Any) -> str:
+    """Account names appear in URLs (/delete_stock/<account>/<ticker>), so no slashes."""
+    if not isinstance(raw, str) or not raw.strip():
+        raise ValueError("Account name is required")
+    name = raw.strip()
+    if "/" in name or len(name) > ACCOUNT_NAME_MAX_LENGTH:
+        raise ValueError(
+            f"Account name must be at most {ACCOUNT_NAME_MAX_LENGTH} characters, without '/'"
+        )
+    return name
+
+
+def _finite_number(payload: Dict[str, Any], key: str) -> float:
+    value = payload.get(key, 0)
+    if isinstance(value, bool):
+        raise ValueError(f"{key} must be a number")
+    try:
+        number = float(value if value not in (None, "") else 0)
+    except (TypeError, ValueError):
+        raise ValueError(f"{key} must be a number") from None
+    if not np.isfinite(number):
+        raise ValueError(f"{key} must be a finite number")
+    return number
+
+
+def _bool_value(value: Any) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    return bool(value)
+
+
+@app.route("/api/accounts", methods=["GET", "POST"])
+def api_accounts():
+    """GET lists accounts; POST upserts JSON {name, equity, cash, allow_short}."""
+    if request.method == "POST":
+        payload = request.get_json(silent=True) or {}
+        try:
+            name = _validate_account_name(payload.get("name"))
+            equity = _finite_number(payload, "equity")
+            cash = _finite_number(payload, "cash")
+            if equity < 0:
+                raise ValueError("equity cannot be negative")
+        except ValueError as e:
+            return _json_error(str(e), 400)
+        db.upsert_account(name, equity, cash, _bool_value(payload.get("allow_short")))
+    return jsonify(_accounts_payload())
+
+
+@app.route("/api/accounts/<name>", methods=["DELETE"])
+def api_accounts_delete(name: str):
+    if name not in _account_names():
+        return _json_error(f"Unknown account '{name}'", 404)
+    try:
+        db.delete_account(name)
+    except ValueError as e:
+        return _json_error(str(e), 400)
+    return jsonify(_accounts_payload())
+
+
+@app.route("/api/accounts/<name>/rename", methods=["POST"])
+def api_accounts_rename(name: str):
+    payload = request.get_json(silent=True) or {}
+    try:
+        new_name = _validate_account_name(payload.get("new_name"))
+        db.rename_account(name, new_name)
+    except ValueError as e:
+        return _json_error(str(e), 400)
+    return jsonify(_accounts_payload())
 
 
 # ═══════════════════════════════════════════════════════════════════

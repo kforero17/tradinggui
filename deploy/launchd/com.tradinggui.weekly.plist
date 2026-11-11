@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Template: scripts/install_launchd.sh replaces __REPO__ with the repo path. -->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.tradinggui.weekly</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>__REPO__/.venv/bin/python</string>
+        <string>-m</string>
+        <string>src.jobs</string>
+        <string>weekly</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>__REPO__</string>
+    <!-- Saturday 06:00 local time; a run missed while asleep starts on wake. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Weekday</key>
+        <integer>6</integer>
+        <key>Hour</key>
+        <integer>6</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>__REPO__/logs/weekly.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>__REPO__/logs/weekly.err.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>__REPO__/.venv/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+    <!-- launchd's default soft limit is 256 open files; yf.download with threads
+         opens a socket per ticker plus yfinance's SQLite caches, and ran out. -->
+    <key>SoftResourceLimits</key>
+    <dict>
+        <key>NumberOfFiles</key>
+        <integer>4096</integer>
+    </dict>
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>
