@@ -46,6 +46,8 @@
   .blocked { color: #ff8a95; font-size: .8rem; }
   .note { color: var(--warn); font-size: .8rem; }
   .empty { color: var(--muted); font-style: italic; padding: 4px 8px; }
+  .blocked-entries { margin-top: 10px; }
+  .blocked-entries > summary { cursor: pointer; color: var(--muted); padding: 4px 8px; }
   .banner { border-radius: 6px; padding: 10px 14px; margin-top: 16px; }
   .banner-stale { background: rgba(220, 53, 69, .18); border: 1px solid var(--neg); color: #ff8a95; }
   .banner-skipped { background: rgba(255, 193, 7, .10); border: 1px solid var(--warn); color: var(--warn); }
@@ -56,6 +58,25 @@
 </head>
 <body>
 <div class="wrap">
+{% macro entry_table(rows) %}
+  <div class="scroll"><table>
+    <tr><th>Ticker</th><th>Account</th><th>Order</th><th class="num">Entry</th><th class="num">Shares</th><th class="num">Stop</th><th class="num">$ Risk</th><th class="num">% Eq</th><th class="num">Score</th><th>Notes</th></tr>
+    {% for r in rows %}
+    <tr>
+      <td><span class="ticker">{{ r.ticker }}</span> {{ dir_badge(r) }}{{ flags(r) }}</td>
+      <td>{{ r.account or '–' }}</td>
+      <td>{{ r.extra.order_type or '' }}</td>
+      <td class="num">{{ (r.extra.entry_level if r.extra.entry_level is not none else r.trigger_price) | price }}</td>
+      <td class="num">{{ r.shares | num }}</td>
+      <td class="num">{{ r.stop_price | price }}</td>
+      <td class="num">{{ r.risk_dollars | money }}</td>
+      <td class="num">{{ r.risk_pct_equity | pct(2) }}</td>
+      <td class="num">{{ r.trend_score | num(0) }}</td>
+      <td class="wrap">{{ notes(r) }}</td>
+    </tr>
+    {% endfor %}
+  </table></div>
+{% endmacro %}
 {% macro dir_badge(row) %}<span class="badge {{ 'b-long' if row.direction == 'LONG' else 'b-short' }}">{{ row.direction }}</span>{% endmacro %}
 {% macro flags(row) %}
 {% if row.status == 'NEW' %}<span class="badge b-new">NEW</span>{% endif %}
@@ -149,24 +170,14 @@
 
   <h2 class="entries">New entries ({{ entries | length }})</h2>
   {% if entries %}
-  <div class="scroll"><table>
-    <tr><th>Ticker</th><th>Account</th><th>Order</th><th class="num">Entry</th><th class="num">Shares</th><th class="num">Stop</th><th class="num">$ Risk</th><th class="num">% Eq</th><th class="num">Score</th><th>Notes</th></tr>
-    {% for r in entries %}
-    <tr>
-      <td><span class="ticker">{{ r.ticker }}</span> {{ dir_badge(r) }}{{ flags(r) }}{% if r.blocked_by %}<span class="badge b-blocked">BLOCKED</span>{% endif %}</td>
-      <td>{{ r.account or '–' }}</td>
-      <td>{{ r.extra.order_type or '' }}</td>
-      <td class="num">{{ (r.extra.entry_level if r.extra.entry_level is not none else r.trigger_price) | price }}</td>
-      <td class="num">{{ r.shares | num }}</td>
-      <td class="num">{{ r.stop_price | price }}</td>
-      <td class="num">{{ r.risk_dollars | money }}</td>
-      <td class="num">{{ r.risk_pct_equity | pct(2) }}</td>
-      <td class="num">{{ r.trend_score | num(0) }}</td>
-      <td class="wrap">{{ notes(r) }}</td>
-    </tr>
-    {% endfor %}
-  </table></div>
-  {% else %}<div class="empty">No new entries.</div>{% endif %}
+{{ entry_table(entries) }}
+  {% else %}<div class="empty">No open entries{% if entries_blocked %}; every breakout is blocked{% endif %}.</div>{% endif %}
+  {% if entries_blocked %}
+  <details class="blocked-entries">
+    <summary>Blocked entries ({{ entries_blocked | length }})</summary>
+{{ entry_table(entries_blocked) }}
+  </details>
+  {% endif %}
 
   <h2>Top watch ({{ watch | length }} of {{ watch_total + watch_hidden }})</h2>
   {% if watch %}

@@ -136,13 +136,14 @@ def test_build_digest_renders_every_section():
     digest = build_digest(DASHBOARD, REPORT)
     assert digest.title == "TradingGui weekly digest"
     assert digest.summary_line == (
-        "1 exit, 1 add, 2 entries (1 new), 1 watch, 1 expired"
+        "1 exit, 1 add, 1 entry (1 new), 1 blocked entry, 1 watch, 1 expired"
     )
     html = digest.html
     for heading in (
         "Exits (1)",
         "Adds (1)",
-        "New entries (2)",
+        "New entries (1)",
+        "Blocked entries (1)",
         "Top watch (1 of 5)",
         "Expired (1)",
         "Heat vs budget",
@@ -161,6 +162,25 @@ def test_build_digest_renders_every_section():
     # HOLD rows are not digest material.
     assert "HLD" not in html
     assert html.count('class="exit"') == 1
+
+
+def test_blocked_entries_are_collapsed_below_the_open_ones():
+    html = build_digest(DASHBOARD).html
+    blocked_section = html.index('<details class="blocked-entries">')
+    assert html.index("New entries (1)") < html.index("A&amp;B") < blocked_section
+    assert html.index("DWN") > blocked_section
+    assert '<details class="blocked-entries" open' not in html
+
+    open_ticker = "A&B<script>alert(1)</script>"
+    only_blocked = {
+        **DASHBOARD,
+        "recommendations": [
+            r for r in DASHBOARD["recommendations"] if r["ticker"] != open_ticker
+        ],
+    }
+    digest = build_digest(only_blocked)
+    assert "No open entries; every breakout is blocked." in digest.html
+    assert "0 entries (0 new), 1 blocked entry" in digest.summary_line
 
 
 def test_build_digest_escapes_tickers_and_notes():
@@ -197,7 +217,7 @@ def test_digest_leads_with_stale_holdings_and_lists_skipped_positions():
     digest = build_digest(dashboard, REPORT)
     assert digest.summary_line == (
         "price data stale for 1 holding – stop checks may be late; "
-        "1 exit, 1 add, 2 entries (1 new), 1 watch, 1 expired"
+        "1 exit, 1 add, 1 entry (1 new), 1 blocked entry, 1 watch, 1 expired"
     )
     assert "Stale prices" in digest.html and "last bar 2026-11-05" in digest.html
     assert "Not evaluated (1)" in digest.html
@@ -214,10 +234,9 @@ def test_text_digest_lists_order_tickets():
     text = build_digest(DASHBOARD, REPORT).text
     assert text.splitlines()[0] == "*TradingGui weekly digest*"
     assert "Exits:" in text and "New entries:" in text
-    assert (
-        "DWN SHORT · sell short stop · 120 @ 50.00 · stop 97.00 · risk $480 · taxable"
-        " · [check borrow, blocked: heat budget]"
-    ) in text
+    # Blocked entries are only counted in the text; the report lists them.
+    assert "DWN" not in text
+    assert "Blocked entries: 1 (listed in the report)" in text
     assert "WCH" not in text  # watch rows stay in the HTML report
 
 

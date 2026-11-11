@@ -108,10 +108,14 @@ def _sections(rows: Sequence[Mapping[str, Any]]) -> dict[str, list[Mapping[str, 
         return -(_finite(row.get("trend_score")) or 0.0)
 
     watch = sorted((r for r in rows if r["action"] == "WATCH"), key=by_score)
+    entries = [r for r in rows if r["action"] == "ENTER"]
     return {
         "exits": [r for r in rows if r["action"] in EXIT_ACTIONS],
         "adds": [r for r in rows if r["action"] == "ADD_UNIT"],
-        "entries": [r for r in rows if r["action"] == "ENTER"],
+        # Most entries are blocked once the heat budget fills; only the open ones
+        # are actionable, so the blocked ones are counted and collapsed.
+        "entries": [r for r in entries if not r.get("blocked_by")],
+        "entries_blocked": [r for r in entries if r.get("blocked_by")],
         "watch": watch[:DIGEST_WATCH_ROWS],
         "watch_total": watch,
     }
@@ -132,8 +136,14 @@ def _summary_line(sections: Mapping[str, list], expired: int) -> str:
         _plural(len(sections["exits"]), "exit"),
         _plural(len(sections["adds"]), "add"),
         f"{_plural(len(entries), 'entry', 'entries')} ({new_entries} new)",
-        f"{len(sections['watch_total'])} watch",
     ]
+    if sections["entries_blocked"]:
+        parts.append(
+            _plural(
+                len(sections["entries_blocked"]), "blocked entry", "blocked entries"
+            )
+        )
+    parts += [f"{len(sections['watch_total'])} watch"]
     if expired:
         parts.append(f"{expired} expired")
     return ", ".join(parts)
@@ -205,6 +215,10 @@ def _text(
         lines.extend(f"• {_ticket(r)}" for r in rows[:TEXT_ROWS_PER_SECTION])
         if len(rows) > TEXT_ROWS_PER_SECTION:
             lines.append(f"…and {len(rows) - TEXT_ROWS_PER_SECTION} more")
+    if sections["entries_blocked"]:
+        lines.append(
+            f"Blocked entries: {len(sections['entries_blocked'])} (listed in the report)"
+        )
     return "\n".join(lines)
 
 
@@ -241,6 +255,7 @@ def build_digest(
         exits=sections["exits"],
         adds=sections["adds"],
         entries=sections["entries"],
+        entries_blocked=sections["entries_blocked"],
         watch=sections["watch"],
         watch_total=len(sections["watch_total"]),
         watch_hidden=(dashboard.get("summary") or {}).get("watch_hidden", 0),

@@ -30,6 +30,9 @@
     const state = {dashboard: null, accounts: [], totalEquity: 0};
     const filters = {direction: 'ALL', asset: 'ALL', account: 'ALL'};
     const groupOpen = Object.fromEntries(GROUPS.map(g => [g.key, g.open]));
+    // Once the heat budget fills most entries are blocked; they start collapsed.
+    let blockedEntriesOpen = false;
+    const isBlocked = r => Boolean(r.blocked_by && r.blocked_by.length);
 
     /* ── Helpers ──────────────────────────────────────────────── */
 
@@ -226,7 +229,7 @@
 
     function buildRow(body, r, expired) {
         const row = body.insertRow();
-        if (r.blocked_by && r.blocked_by.length) row.className = 'today-blocked';
+        if (isBlocked(r)) row.className = 'today-blocked';
         const x = r.extra || {};
 
         const tickerCell = row.insertCell();
@@ -301,15 +304,30 @@
         }
         for (const g of GROUPS) {
             const groupRows = rows.filter(r => g.actions.includes(r.action));
+            const collapseBlocked = g.key === 'enter';
+            const shown = collapseBlocked ? groupRows.filter(r => !isBlocked(r)) : groupRows;
+            const blocked = collapseBlocked ? groupRows.filter(isBlocked) : [];
             const details = node('details', `card today-group ${g.cls}`);
             details.open = groupOpen[g.key];
             details.addEventListener('toggle', () => { groupOpen[g.key] = details.open; });
             const summary = node('summary', null, g.title + ' ');
-            summary.append(node('span', 'text-muted', `(${groupRows.length})`));
+            const counts = blocked.length ? `(${shown.length} · ${blocked.length} blocked)` : `(${shown.length})`;
+            summary.append(node('span', 'text-muted', counts));
             details.append(summary);
-            details.append(groupRows.length ? buildTable(groupRows, false) : node('p', 'text-muted', g.empty));
+            if (shown.length) details.append(buildTable(shown, false));
+            else details.append(node('p', 'text-muted', blocked.length ? 'Every breakout is blocked.' : g.empty));
+            if (blocked.length) details.append(blockedEntries(blocked));
             container.append(details);
         }
+    }
+
+    function blockedEntries(rows) {
+        const details = node('details', 'today-blocked-entries');
+        details.open = blockedEntriesOpen;
+        details.addEventListener('toggle', () => { blockedEntriesOpen = details.open; });
+        details.append(node('summary', null, `Blocked entries (${rows.length})`));
+        details.append(buildTable(rows, false));
+        return details;
     }
 
     function renderExpired() {
@@ -361,13 +379,13 @@
         const cards = [
             metricCard('Exits', String(exits), exits ? 'negative' : ''),
             metricCard('Adds', String(count(['ADD_UNIT'])), count(['ADD_UNIT']) ? 'positive' : ''),
-            metricCard('New entries', String(count(['ENTER']))),
+            metricCard('New entries', String(rows.filter(r => r.action === 'ENTER' && !isBlocked(r)).length)),
             metricCard('Watch', String(count(['WATCH']))),
         ];
         const hidden = state.dashboard && state.dashboard.summary && state.dashboard.summary.watch_hidden;
         if (number(hidden) && hidden > 0) cards[3].append(node('div', 'metric-sub', `${hidden} more not shown`));
-        const blocked = rows.filter(r => r.blocked_by && r.blocked_by.length).length;
-        if (blocked) cards[2].append(node('div', 'metric-sub', `${blocked} blocked across all groups`));
+        const blocked = rows.filter(r => r.action === 'ENTER' && isBlocked(r)).length;
+        if (blocked) cards[2].append(node('div', 'metric-sub', `${blocked} more blocked`));
         return cards;
     }
 

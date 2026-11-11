@@ -67,7 +67,7 @@ Exit codes for `python -m src.jobs`:
 
 ### Notifications
 
-The digest goes to `data/reports/digest_<job>_<YYYY-MM-DD>.html`, a macOS notification (`osascript`) and, if `SLACK_WEBHOOK_URL` is set, a Slack webhook. Delivery is best-effort: a failed channel is logged and doesn't fail the job.
+The digest goes to `data/reports/digest_<job>_<YYYY-MM-DD>.html`, a macOS notification (`osascript`) and, if `SLACK_WEBHOOK_URL` is set, a Slack webhook. Delivery is best-effort: a failed channel is logged and doesn't fail the job. Entries blocked by the heat budget, cash or unit limits are counted in the summary line and collapsed under **Blocked entries** in the report; the Slack text gives only their count.
 
 ## Scheduling (macOS launchd)
 
@@ -233,7 +233,7 @@ Start with `python run_web_app.py` (default: `http://127.0.0.1:8051`).
 
 | Route | Tab | Description |
 |---|---|---|
-| `/` | Today | Home page, read from the latest stored run. Shows the action list (exits, add-ons, entries, watch) with copyable order tickets and NEW / STILL VALID / LATE badges, open risk against the heat budget, and the market regime (benchmark vs its 200-day average, breadth). It also has the signal journal (Taken / Skip / Note per row), expired signals, a STALE warning when the weekly run is more than 8 days old, a red banner for holdings with stale prices, a "Not evaluated" card for holdings the rules couldn't check (for example, no cost basis), the Accounts editor and **Recheck holdings**. Filters by direction, asset type and account. |
+| `/` | Today | Home page, read from the latest stored run. Shows the action list (exits, add-ons, entries, watch) with copyable order tickets and NEW / STILL VALID / LATE badges (entries that can't be placed are collapsed under **Blocked entries** with the reason), open risk against the heat budget, and the market regime (benchmark vs its 200-day average, breadth). It also has the signal journal (Taken / Skip / Note per row), expired signals, a STALE warning when the weekly run is more than 8 days old, a red banner for holdings with stale prices, a "Not evaluated" card for holdings the rules couldn't check (for example, no cost basis), the Accounts editor and **Recheck holdings**. Filters by direction, asset type and account. |
 | `/portfolio` | Portfolio | Holdings grouped by account, with period gains (1D/1W/1M/YTD), Plotly price charts and summary totals. Add/sell/cover/update stock positions; add/close option positions. |
 | `/research` | Research | Single-stock lookup. Searches DB first, falls back to live yfinance fetch. Shows chart + metrics. |
 | `/momentum` | Momentum | Screener table filterable by market cap and % above MA-100, with a bearish view. Click for chart modal. |
