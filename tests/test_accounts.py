@@ -217,3 +217,43 @@ def test_position_changes_report_whether_a_row_matched(database):
     assert database.update_portfolio_cost_basis("AAPL", 500.0) is True
     assert database.delete_portfolio_ticker("AAPL") is True
     assert database.get_portfolio_with_shares() == []
+
+
+def test_move_position_keeps_shares_cost_and_add_date(database):
+    database.upsert_account("roth", equity=50_000, cash=10_000, allow_short=False)
+    database.add_portfolio_ticker("MRX", cost_basis=19150.0, shares=270)
+    [before] = database.get_portfolio_with_shares()
+
+    assert database.move_portfolio_position("MRX", settings.DEFAULT_ACCOUNT, "roth")
+
+    [after] = database.get_portfolio_with_shares()
+    assert after == {**before, "account": "roth"}
+    assert database.get_ytd_realized_gains()["gains"] == []
+    assert (
+        database.move_portfolio_position("MRX", settings.DEFAULT_ACCOUNT, "roth")
+        is False
+    )
+
+
+def test_move_position_refusals_leave_it_in_place(database):
+    database.upsert_account("roth", equity=50_000, cash=10_000, allow_short=False)
+    database.upsert_account("taxable", equity=80_000, cash=20_000, allow_short=True)
+    database.add_portfolio_ticker("AAPL", cost_basis=1000.0, shares=10)
+    database.add_portfolio_ticker("AAPL", cost_basis=500.0, shares=5, account="roth")
+    database.add_portfolio_ticker(
+        "SPCX", cost_basis=14400.0, shares=-100, account="taxable"
+    )
+
+    with pytest.raises(ValueError, match="Unknown account"):
+        database.move_portfolio_position("AAPL", settings.DEFAULT_ACCOUNT, "nope")
+    with pytest.raises(ValueError, match="already in the roth account"):
+        database.move_portfolio_position("AAPL", settings.DEFAULT_ACCOUNT, "roth")
+    with pytest.raises(ValueError, match="does not allow short"):
+        database.move_portfolio_position("SPCX", "taxable", "roth")
+
+    held = {(p["account"], p["ticker"]) for p in database.get_portfolio_with_shares()}
+    assert held == {
+        (settings.DEFAULT_ACCOUNT, "AAPL"),
+        ("roth", "AAPL"),
+        ("taxable", "SPCX"),
+    }

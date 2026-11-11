@@ -859,6 +859,42 @@ class Database:
         finally:
             session.close()
 
+    def move_portfolio_position(
+        self, ticker: str, from_account: str, to_account: str
+    ) -> bool:
+        """Move a position, with its shares, cost basis and add date, to another account.
+
+        Returns False when ``from_account`` holds no such position. Raises ValueError
+        for an unknown target account, a target that already holds ``ticker``, or a
+        short moved into an account that doesn't allow shorts.
+        """
+        session = self.Session()
+        try:
+            record = session.get(Portfolio, (from_account, ticker))
+            if record is None:
+                logger.warning(
+                    f"Ticker {ticker} not found in portfolio ({from_account})"
+                )
+                return False
+            self._require_account(session, to_account)
+            if session.get(Portfolio, (to_account, ticker)) is not None:
+                raise ValueError(f"{ticker} is already in the {to_account} account")
+            self._check_short_allowed(session, to_account, 0.0, record.shares or 0.0)
+            session.query(Portfolio).filter_by(
+                account=from_account, ticker=ticker
+            ).update({Portfolio.account: to_account}, synchronize_session=False)
+            session.commit()
+            logger.info(f"Moved {ticker} from {from_account} to {to_account}")
+            return True
+        except Exception as e:
+            session.rollback()
+            logger.error(
+                f"Error moving {ticker} from {from_account} to {to_account}: {e}"
+            )
+            raise
+        finally:
+            session.close()
+
     def update_portfolio_shares(
         self, ticker: str, shares: float, account: str = settings.DEFAULT_ACCOUNT
     ) -> bool:

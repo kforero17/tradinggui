@@ -204,6 +204,17 @@
                            value="{{ stock.cost_basis or 0 }}" step="0.01" min="0" class="shares-input">
                     <button type="submit" class="btn-sm">Update</button>
                 </form>
+                {% if accounts|length > 1 %}
+                <form action="{{ url_for('move_stock') }}" method="post" class="shares-form">
+                    <input type="hidden" name="ticker" value="{{ stock.ticker }}">
+                    <input type="hidden" name="account" value="{{ stock.account }}">
+                    <label for="move-{{ slug }}">Move to:</label>
+                    <select id="move-{{ slug }}" name="to_account">
+                        {% for name in accounts if name != stock.account %}<option value="{{ name }}">{{ name }}</option>{% endfor %}
+                    </select>
+                    <button type="submit" class="btn-sm">Move</button>
+                </form>
+                {% endif %}
             </div>
 
             <div class="position-summary">

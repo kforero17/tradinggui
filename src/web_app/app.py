@@ -1082,6 +1082,35 @@ def update_cost_basis():
     return redirect(url_for("portfolio"))
 
 
+@app.route("/move_stock", methods=["POST"])
+def move_stock():
+    """Move a position to another account without recording a sale."""
+    ticker = request.form.get("ticker", "").upper().strip()
+    to_account = request.form.get("to_account", "").strip()
+    if not ticker or not to_account:
+        flash("Choose a position and an account to move it to.", "warning")
+        return redirect(url_for("portfolio"))
+
+    try:
+        account = _form_position_account(ticker, "move")
+        if account is None:
+            return redirect(url_for("portfolio"))
+        if to_account == account:
+            flash(f"{ticker} is already in the {account} account.", "info")
+        elif db.move_portfolio_position(ticker, account, to_account):
+            flash(f"Moved {ticker} from {account} to {to_account}.", "success")
+        else:
+            _flash_no_position(ticker, account)
+    except ValueError as e:
+        # Unknown target, target already holds it, or a short into a long-only account
+        flash(str(e), "error")
+    except Exception as e:
+        logger.error(f"Error moving stock {ticker}: {e}")
+        flash(f"An error occurred while moving {ticker}.", "error")
+
+    return redirect(url_for("portfolio"))
+
+
 @app.route("/sell_stock", methods=["POST"])
 def sell_stock():
     """Sell a stock from an account's portfolio and record YTD realized gain."""

@@ -426,6 +426,53 @@ def test_update_and_delete_use_the_posted_account(client, database, offline_pric
     assert len(database.get_portfolio_with_shares()) == 1
 
 
+def test_move_stock_route_moves_to_the_chosen_account(client, database, offline_prices):
+    database.upsert_account("roth", 0.0, 0.0, allow_short=False)
+    _store_metrics(database, "MRX")
+    database.add_portfolio_ticker("MRX", 19150.0, 270.0)
+
+    page = client.get("/portfolio").get_data(as_text=True)
+    assert 'name="to_account"' in page
+
+    response = client.post(
+        "/move_stock",
+        data={
+            "ticker": "MRX",
+            "account": settings.DEFAULT_ACCOUNT,
+            "to_account": "roth",
+        },
+        follow_redirects=True,
+    )
+    assert f"Moved MRX from {settings.DEFAULT_ACCOUNT} to roth." in response.get_data(
+        as_text=True
+    )
+    [moved] = database.get_portfolio_with_shares()
+    assert (moved["account"], moved["shares"], moved["cost_basis"]) == (
+        "roth",
+        270.0,
+        19150.0,
+    )
+
+
+def test_move_stock_into_long_only_account_flashes_the_reason(client, database):
+    database.upsert_account("roth", 0.0, 0.0, allow_short=False)
+    database.add_portfolio_ticker("XOM", 500.0, -10.0)
+
+    response = client.post(
+        "/move_stock",
+        data={
+            "ticker": "XOM",
+            "account": settings.DEFAULT_ACCOUNT,
+            "to_account": "roth",
+        },
+        follow_redirects=True,
+    )
+    assert "does not allow short positions" in response.get_data(as_text=True)
+    assert (
+        database.get_portfolio_with_shares()[0]["account"] == settings.DEFAULT_ACCOUNT
+    )
+
+
 def test_legacy_delete_route_removes_from_default_account(client, database):
     database.add_portfolio_ticker("AAPL", 100.0, 1.0)
     response = client.get("/delete_stock/AAPL")
